@@ -37,12 +37,27 @@ const handleChat = async (req, res) => {
       });
     }
 
-    // Execute AI API Call using target model
+    // Construct User Profile Details for AI Context
+    const userProfileContext = [
+      `User Name: ${user.name || user.username || "Member"}`,
+      `Subscription Plan: ${user.subscriptionTier || "free"}`,
+      `Primary Goal: ${user.goal || user.fitnessGoal || "General Fitness & Health"}`,
+      `Daily Calorie Target: ${user.dailyCalorieTarget || user.calorieTarget || "Not set"} kcal`,
+      `Dietary Preferences: ${user.dietaryPreferences || user.dietType || "None specified"}`,
+      `Current Weight: ${user.weight ? `${user.weight} kg` : "Not provided"}`,
+      `Height: ${user.height ? `${user.height} cm` : "Not provided"}`,
+    ].join("\n");
+
+    // Execute AI API Call using gemini-3.5-flash-lite
     const selectedModel = model || "gemini-3.5-flash-lite";
     const geminiModel = genAI.getGenerativeModel({
       model: selectedModel,
-      systemInstruction:
-        "You are NutriBot, an expert AI nutritionist and fitness coach. Provide concise advice focused strictly on diet, macro tracking, meal planning, and recipes.",
+      systemInstruction: `You are NutriBot, an expert AI nutritionist and fitness coach. Provide concise advice focused strictly on diet, macro tracking, meal planning, and recipes.
+
+Current User Context:
+${userProfileContext}
+
+Personalize your responses using the user context above. When the user asks "Do you know me?" or inquires about their profile, state their details naturally and warmly.`,
     });
 
     const result = await geminiModel.generateContent(message);
