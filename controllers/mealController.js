@@ -5,9 +5,19 @@ const mongoose = require("mongoose");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // 1. AI Text Analysis
-
 const analyzeMealText = async (req, res) => {
   try {
+    // 🔒 Pro User Check
+    if (
+      req.user?.subscriptionTier !== "pro" &&
+      process.env.NODE_ENV === "production"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Yeh feature sirf Pro Users ke liye hai! Upgrade karein.",
+      });
+    }
+
     const { text } = req.body;
     if (!text || text.trim() === "") {
       return res
@@ -24,6 +34,7 @@ const analyzeMealText = async (req, res) => {
 
     const genAI = new GoogleGenerativeAI(apiKey);
 
+    // Standard Gemini Flash Model
     const model = genAI.getGenerativeModel({
       model: "gemini-3.5-flash-lite",
       generationConfig: {
@@ -45,13 +56,10 @@ JSON Schema:
     const result = await model.generateContent(prompt);
     let rawText = result.response.text();
 
-    console.log("📥 Raw response from Gemini:", rawText); // Debugging ke liye
-
     if (!rawText || rawText.trim() === "") {
       throw new Error("Gemini returned empty output");
     }
 
-    // Clean backticks or unwanted chars if returned
     rawText = rawText
       .replace(/```json/gi, "")
       .replace(/```/g, "")
@@ -73,10 +81,28 @@ JSON Schema:
 const analyzeMealImage = async (req, res, next) => {
   console.log("📥 AI Scan request received at backend!");
   try {
+    // 🔒 Pro User Check (Development environment mein bypass rahega)
+    if (
+      req.user?.subscriptionTier !== "pro" &&
+      process.env.NODE_ENV === "production"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Yeh feature sirf Pro Users ke liye hai! Upgrade karein.",
+      });
+    }
+
     const imageBase64 = req.body.imageBase64 || req.body.image;
+    if (!imageBase64) {
+      return res.status(400).json({
+        success: false,
+        message: "Image data missing",
+      });
+    }
+
     const nutritionData = await aiService.analyzeFoodImage(imageBase64);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       status: "success",
       data: nutritionData,
@@ -89,7 +115,7 @@ const analyzeMealImage = async (req, res, next) => {
 // 3. Get Today's Meals & Summary
 const getDailySummary = async (req, res) => {
   try {
-    const { date } = req.query; // Format: "YYYY-MM-DD"
+    const { date } = req.query;
     const targetDate = date ? new Date(date) : new Date();
 
     const startOfDay = new Date(targetDate);
@@ -196,12 +222,10 @@ const logMeal = async (req, res, next) => {
 const deleteMeal = async (req, res) => {
   try {
     const { id } = req.params;
-    console.log("👉 Backend received delete ID:", id);
 
     const meal = await Meal.findById(id);
 
     if (!meal) {
-      console.log("❌ Meal DB mein nahi mili!");
       return res.status(404).json({
         success: false,
         message: "Meal not found in database",
@@ -210,13 +234,11 @@ const deleteMeal = async (req, res) => {
 
     await Meal.findByIdAndDelete(id);
 
-    console.log("✅ Meal successfully deleted from MongoDB!");
     return res.status(200).json({
       success: true,
       message: "Meal deleted successfully",
     });
   } catch (error) {
-    console.error("🔥 Delete Error:", error.message);
     return res.status(500).json({
       success: false,
       message: error.message,

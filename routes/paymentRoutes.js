@@ -7,7 +7,7 @@ const { protect } = require("../middlewares/authMiddleware");
 const stripeKey = process.env.STRIPE_SECRET_KEY || "sk_test_dummy_key_for_dev";
 const stripe = Stripe(stripeKey);
 
-// 1. Create Checkout Session (userId URL query mein pass kar rahe hain)
+// 1. Create Checkout Session
 router.post("/create-checkout-session", protect, async (req, res) => {
   try {
     if (!process.env.STRIPE_SECRET_KEY) {
@@ -15,6 +15,12 @@ router.post("/create-checkout-session", protect, async (req, res) => {
         message: "Stripe API Key missing on server.",
       });
     }
+
+    // Dynamic Server URL (Vercel ya Local Host)
+    const serverUrl =
+      process.env.SERVER_URL ||
+      `${req.protocol}://${req.get("host")}` ||
+      "https://nutrimorph-backend.vercel.app";
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -34,9 +40,8 @@ router.post("/create-checkout-session", protect, async (req, res) => {
         },
       ],
       customer_email: req.user.email,
-      // 💡 userId bhej rahe hain taake success route par DB update ho sake
-      success_url: `https://785zddr9-5000.asse.devtunnels.ms/api/payment/success?userId=${req.user._id}`,
-      cancel_url: "https://785zddr9-5000.asse.devtunnels.ms/api/payment/cancel",
+      success_url: `${serverUrl}/api/payment/success?userId=${req.user._id}`,
+      cancel_url: `${serverUrl}/api/payment/cancel`,
     });
 
     res.json({ success: true, url: session.url, id: session.id });
@@ -45,13 +50,12 @@ router.post("/create-checkout-session", protect, async (req, res) => {
   }
 });
 
-// 2. Success Redirect (MongoDB mein Auto Update Karega)
+// 2. Success Redirect (MongoDB Auto Update)
 router.get("/success", async (req, res) => {
   try {
     const { userId } = req.query;
 
     if (userId) {
-      // User ko Database mein Pro mark karein
       await User.findByIdAndUpdate(userId, {
         subscriptionTier: "pro",
         subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 Days
@@ -86,15 +90,9 @@ router.post("/verify-payment", protect, async (req, res) => {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    user.subscriptionTier = "pro";
-    user.subscriptionExpiresAt = new Date(
-      Date.now() + 30 * 24 * 60 * 60 * 1000,
-    );
-    await user.save();
-
+    // Status fetch karke current user return karein
     res.json({
       success: true,
-      message: "Pro Plan Activated Successfully!",
       user,
     });
   } catch (error) {
@@ -102,7 +100,7 @@ router.post("/verify-payment", protect, async (req, res) => {
   }
 });
 
-// 5. Downgrade / Switch to Free Plan (No Charge)
+// 5. Downgrade / Switch to Free Plan
 router.post("/switch-to-free", protect, async (req, res) => {
   try {
     const user = await User.findById(req.user._id);

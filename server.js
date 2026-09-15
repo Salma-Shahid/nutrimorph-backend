@@ -1,7 +1,7 @@
 const dns = require("dns");
 dns.setDefaultResultOrder("ipv4first");
 const dotenv = require("dotenv");
-dotenv.config(); // 👈 Sabse pehle env variables load hona lazmi hain!
+dotenv.config(); // Load environment variables from .env file
 
 const express = require("express");
 const cors = require("cors");
@@ -16,14 +16,14 @@ const paymentRoutes = require("./routes/paymentRoutes");
 connectDB();
 
 const app = express();
-// 🟢 DevTunnel / Proxy headers ko allow karne ke liye
+// 🟢 DevTunnel / Allow proxy headers
 app.set("trust proxy", 1);
 
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-// Har incoming request ko terminal par print karne ke liye:
+// For every incoming request to print in the terminal:
 app.use((req, res, next) => {
   console.log(`📩 Incoming Request: ${req.method} ${req.url}`);
   next();
@@ -36,7 +36,7 @@ app.use("/api", apiLimiter);
 app.use("/api/auth", authRoutes);
 app.use("/api/meals", mealRoutes);
 app.use("/api/water", waterRoutes);
-// Endpoints list mein add karein:
+// Add Endpoints in list:
 app.use("/api/chat", chatRoutes);
 app.use("/api/payment", paymentRoutes);
 
