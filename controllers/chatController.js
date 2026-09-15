@@ -39,7 +39,11 @@ const handleChat = async (req, res) => {
 
     // Execute AI API Call using target model
     const selectedModel = model || "gemini-3.5-flash-lite";
-    const geminiModel = genAI.getGenerativeModel({ model: selectedModel });
+    const geminiModel = genAI.getGenerativeModel({
+      model: selectedModel,
+      systemInstruction:
+        "You are NutriBot, an expert AI nutritionist and fitness coach. Provide concise advice focused strictly on diet, macro tracking, meal planning, and recipes.",
+    });
 
     const result = await geminiModel.generateContent(message);
     const responseText = result.response.text();
