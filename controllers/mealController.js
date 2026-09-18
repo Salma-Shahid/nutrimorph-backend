@@ -14,7 +14,7 @@ const analyzeMealText = async (req, res) => {
     ) {
       return res.status(403).json({
         success: false,
-        message: "Yeh feature sirf Pro Users ke liye hai! Upgrade karein.",
+        message: "This feature is only available for Pro Users. Please upgrade to access it.",
       });
     }
 
@@ -88,7 +88,7 @@ const analyzeMealImage = async (req, res, next) => {
     ) {
       return res.status(403).json({
         success: false,
-        message: "Yeh feature sirf Pro Users ke liye hai! Upgrade karein.",
+        message: "This feature is only available for Pro Users. Please upgrade to access it.",
       });
     }
 
