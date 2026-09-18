@@ -22,6 +22,8 @@ const register = async (req, res) => {
       name,
       email,
       password: hashedPassword,
+      subscriptionTier: "free",
+      isPro: false,
     });
 
     res.status(201).json({
@@ -29,6 +31,8 @@ const register = async (req, res) => {
       name: user.name,
       email: user.email,
       isOnboarded: user.isOnboarded,
+      subscriptionTier: user.subscriptionTier,
+      isPro: user.isPro,
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -55,8 +59,14 @@ const login = async (req, res) => {
       name: user.name,
       email: user.email,
       isOnboarded: user.isOnboarded,
-      dailyCalories: user.dailyCalories,
+      dailyCalories: user.dailyCalories || 2000,
+      dailyCalorieGoal: user.dailyCalorieGoal || user.dailyCalories || 2000,
+      subscriptionTier: user.subscriptionTier || "free",
+      isPro: user.isPro || false,
+      avatar: user.avatar || user.profileImage || null,
       macros: user.macros,
+      weight: user.weight,
+      height: user.height,
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -89,20 +99,34 @@ const updateProfile = async (req, res) => {
       name,
       email,
       profileImage,
+      avatar,
       age,
       gender,
       weight,
       height,
       goal,
       calorieTarget,
+      dailyCalorieGoal,
+      subscriptionTier,
+      isPro,
     } = req.body;
 
-    // 1. Basic details update
+    // 1. Basic details & Avatar update
     if (name) user.name = name;
     if (email) user.email = email;
     if (profileImage !== undefined) user.profileImage = profileImage;
+    if (avatar !== undefined) user.avatar = avatar;
 
-    // 2. Health metrics update
+    // 2. Plan / Subscription Tier Direct Update (MongoDB Atlas Fix)
+    if (subscriptionTier !== undefined) {
+      user.subscriptionTier = subscriptionTier;
+      user.isPro = subscriptionTier === "pro";
+    }
+    if (isPro !== undefined) {
+      user.isPro = isPro;
+    }
+
+    // 3. Health metrics update
     const numAge = age !== undefined ? Number(age) : user.age;
     const numWeight = weight !== undefined ? Number(weight) : user.weight;
     const numHeight = height !== undefined ? Number(height) : user.height;
@@ -115,14 +139,14 @@ const updateProfile = async (req, res) => {
     if (userGender) user.gender = userGender;
     if (userGoal) user.goal = userGoal;
 
-    // 3. Calorie & Macro recalculation / override
-    let targetCalories = user.dailyCalories || 2400;
+    // 4. Calorie & Macro recalculation / override
+    let targetCalories = user.dailyCalories || user.dailyCalorieGoal || 2000;
 
-    if (calorieTarget) {
-      // Manual target set from Profile settings
-      targetCalories = Number(calorieTarget);
+    const manualCalorieGoal = calorieTarget || dailyCalorieGoal;
+
+    if (manualCalorieGoal) {
+      targetCalories = Number(manualCalorieGoal);
     } else if (numAge && numWeight && numHeight && userGender) {
-      // Mifflin-St Jeor Formula (Auto-calculate)
       let bmr = 10 * numWeight + 6.25 * numHeight - 5 * numAge;
       bmr += userGender === "female" ? -161 : 5;
 
@@ -136,6 +160,7 @@ const updateProfile = async (req, res) => {
     }
 
     user.dailyCalories = targetCalories;
+    user.dailyCalorieGoal = targetCalories;
 
     // Recalculate Macros based on target calories
     user.macros = {

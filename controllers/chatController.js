@@ -1,7 +1,7 @@
 const ChatMessage = require("../models/ChatMessage");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// Initialize Google Generative AI with your environment API Key
+// Initialize Google Generative AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // Handle Chat Logic
@@ -37,19 +37,19 @@ const handleChat = async (req, res) => {
       });
     }
 
-    // Construct User Profile Details for AI Context
+    // Construct User Profile Details with fallbacks
     const userProfileContext = [
       `User Name: ${user.name || user.username || "Member"}`,
       `Subscription Plan: ${user.subscriptionTier || "free"}`,
       `Primary Goal: ${user.goal || user.fitnessGoal || "General Fitness & Health"}`,
-      `Daily Calorie Target: ${user.dailyCalorieTarget || user.calorieTarget || "Not set"} kcal`,
+      `Daily Calorie Target: ${user.dailyCalorieTarget || user.calorieTarget || user.dailyCalorieGoal || user.dailyCalories || "Not set"} kcal`,
       `Dietary Preferences: ${user.dietaryPreferences || user.dietType || "None specified"}`,
       `Current Weight: ${user.weight ? `${user.weight} kg` : "Not provided"}`,
       `Height: ${user.height ? `${user.height} cm` : "Not provided"}`,
     ].join("\n");
 
-    // Execute AI API Call using gemini-3.5-flash-lite
-    const selectedModel = model || "gemini-3.5-flash-lite";
+    // Valid Gemini Model fallback (gemini-2.5-flash)
+    const selectedModel = model || "gemini-2.5-flash";
     const geminiModel = genAI.getGenerativeModel({
       model: selectedModel,
       systemInstruction: `You are NutriBot, an expert AI nutritionist and fitness coach. Provide concise advice focused strictly on diet, macro tracking, meal planning, and recipes.
@@ -72,8 +72,8 @@ Personalize your responses using the user context above. When the user asks "Do 
     // Persist User & Bot Messages in MongoDB Chat History
     const userId = user._id || user.id;
     await ChatMessage.create([
-      { userId, sender: "user", text: message.trim() },
-      { userId, sender: "bot", text: responseText.trim() },
+      { userId, user: userId, sender: "user", text: message.trim() },
+      { userId, user: userId, sender: "bot", text: responseText.trim() },
     ]);
 
     // Send unified success response back to frontend
@@ -99,16 +99,22 @@ Personalize your responses using the user context above. When the user asks "Do 
 // Fetch Chat History Logic
 const getChatHistory = async (req, res) => {
   try {
-    const { userId } = req.params;
-    if (!userId) {
+    // Extract userId from Auth middleware or params safely
+    let userId = req.user?._id || req.user?.id || req.params.userId;
+
+    if (!userId || userId === "history") {
       return res.status(400).json({
         success: false,
-        message: "User ID parameter is required.",
+        message: "Valid User ID is required.",
       });
     }
 
-    const history = await ChatMessage.find({ userId }).sort({ createdAt: 1 });
-    return res.status(200).json({ success: true, history });
+    const history = await ChatMessage.find({
+      $or: [{ userId }, { user: userId }],
+    }).sort({ createdAt: 1 });
+
+    // Return history directly array/response compatible with frontend
+    return res.status(200).json(history || []);
   } catch (error) {
     console.error("Error in getChatHistory controller:", error);
     return res.status(500).json({
@@ -118,7 +124,6 @@ const getChatHistory = async (req, res) => {
   }
 };
 
-// Export controller functions
 module.exports = {
   handleChat,
   getChatHistory,
