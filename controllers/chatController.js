@@ -99,30 +99,27 @@ Personalize your responses using the user context above. When the user asks "Do 
 // Fetch Chat History Logic
 const getChatHistory = async (req, res) => {
   try {
-    // Extract userId from Auth middleware or params safely
-    let userId = req.user?._id || req.user?.id || req.params.userId;
+    // req.user check karein (JWT Auth Middleware se)
+    const userId = req.user?._id || req.user?.id;
 
-    if (!userId || userId === "history") {
-      return res.status(400).json({
-        success: false,
-        message: "Valid User ID is required.",
-      });
+    if (!userId) {
+      return res.status(401).json({ message: "User not authenticated" });
     }
 
-    const history = await ChatMessage.find({
-      $or: [{ userId }, { user: userId }],
-    }).sort({ createdAt: 1 });
+    // Database query
+    const history = await ChatMessage.find({ userId }).sort({ createdAt: 1 });
 
-    // Return history directly array/response compatible with frontend
-    return res.status(200).json(history || []);
+    return res.status(200).json({ history: history || [] });
   } catch (error) {
-    console.error("Error in getChatHistory controller:", error);
+    console.error("Error fetching chat history:", error.message);
     return res.status(500).json({
-      success: false,
-      message: "Failed to fetch chat history.",
+      message: "Failed to load chat history",
+      error: error.message,
     });
   }
 };
+
+module.exports = { getChatHistory /* other controllers */ };
 
 module.exports = {
   handleChat,
