@@ -48,8 +48,8 @@ const handleChat = async (req, res) => {
       `Height: ${user.height ? `${user.height} cm` : "Not provided"}`,
     ].join("\n");
 
-    // Valid Gemini Model fallback (gemini-2.5-flash)
-    const selectedModel = model || "gemini-2.5-flash";
+    // Valid Gemini Model fallback (gemini-3.5-flash-lite)
+    const selectedModel = model || "gemini-3.5-flash-lite";
     const geminiModel = genAI.getGenerativeModel({
       model: selectedModel,
       systemInstruction: `You are NutriBot, an expert AI nutritionist and fitness coach. Provide concise advice focused strictly on diet, macro tracking, meal planning, and recipes.
@@ -72,8 +72,20 @@ Personalize your responses using the user context above. When the user asks "Do 
     // Persist User & Bot Messages in MongoDB Chat History
     const userId = user._id || user.id;
     await ChatMessage.create([
-      { userId, user: userId, sender: "user", text: message.trim() },
-      { userId, user: userId, sender: "bot", text: responseText.trim() },
+      {
+        user: userId,
+        userId: userId,
+        role: "user",
+        sender: "user",
+        text: message.trim(),
+      },
+      {
+        user: userId,
+        userId: userId,
+        role: "bot",
+        sender: "bot",
+        text: responseText.trim(),
+      },
     ]);
 
     // Send unified success response back to frontend
@@ -99,15 +111,16 @@ Personalize your responses using the user context above. When the user asks "Do 
 // Fetch Chat History Logic
 const getChatHistory = async (req, res) => {
   try {
-    // req.user check karein (JWT Auth Middleware se)
     const userId = req.user?._id || req.user?.id;
 
     if (!userId) {
       return res.status(401).json({ message: "User not authenticated" });
     }
 
-    // Database query
-    const history = await ChatMessage.find({ userId }).sort({ createdAt: 1 });
+    // Query both 'user' and 'userId' fields for backwards compatibility
+    const history = await ChatMessage.find({
+      $or: [{ user: userId }, { userId: userId }],
+    }).sort({ createdAt: 1 });
 
     return res.status(200).json({ history: history || [] });
   } catch (error) {
@@ -118,8 +131,6 @@ const getChatHistory = async (req, res) => {
     });
   }
 };
-
-module.exports = { getChatHistory /* other controllers */ };
 
 module.exports = {
   handleChat,

@@ -7,10 +7,17 @@ const chatMessageSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
     role: {
       type: String,
-      enum: ["user", "model", "assistant"],
+      enum: ["user", "system", "bot", "model"],
       required: true,
+    },
+    sender: {
+      type: String,
     },
     text: {
       type: String,
