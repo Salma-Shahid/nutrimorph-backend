@@ -3,33 +3,71 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
-const connectDB = require("../config/db"); // Note: Apni file location ke hisab se path set karein (e.g. "../db")
+const connectDB = require("../config/db");
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
 };
 
-// @desc    Register new user & send verification email
+// @desc    Register new user & send/resend verification email
 // @route   POST /api/auth/register
 // @access  Public
 const register = async (req, res) => {
   try {
-    // 🟢 Ensure MongoDB Connection before executing query
     await connectDB();
 
     const { name, email, password } = req.body;
 
-    const userExists = await User.findOne({ email });
-    if (userExists) {
-      return res.status(400).json({ message: "User already exists" });
-    }
-
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    // Generate Verification Token & Expiration (24 Hours)
     const verificationToken = crypto.randomBytes(32).toString("hex");
     const verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000;
+
+    const userExists = await User.findOne({ email });
+
+    if (userExists) {
+      // 🟢 Case 1: Account exists but is NOT verified -> Resend Verification Email
+      if (!userExists.isVerified) {
+        const salt = await bcrypt.genSalt(10);
+        userExists.password = await bcrypt.hash(password, salt);
+        if (name) userExists.name = name;
+        userExists.verificationToken = verificationToken;
+        userExists.verificationTokenExpires = verificationTokenExpires;
+
+        await userExists.save();
+
+        const baseUrl =
+          process.env.BACKEND_URL || `${req.protocol}://${req.get("host")}`;
+        const verifyUrl = `${baseUrl}/api/auth/verify-email?token=${verificationToken}&id=${userExists._id}`;
+
+        const emailTemplate = `
+          <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+            <h2>Welcome back to NutriMorph, ${userExists.name}! 🎉</h2>
+            <p>Please verify your email address to activate your account.</p>
+            <a href="${verifyUrl}" style="background-color: #10B981; color: white; padding: 12px 20px; text-decoration: none; border-radius: 6px; display: inline-block; margin-top: 10px;">Verify Email Address</a>
+            <p style="margin-top: 20px; color: #666; font-size: 12px;">This link will expire in 24 hours.</p>
+          </div>
+        `;
+
+        await sendEmail({
+          email: userExists.email,
+          subject: "NutriMorph - Verify Your Email Address",
+          html: emailTemplate,
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: "Please check your email address to verify your account.",
+        });
+      }
+
+      // 🔴 Case 2: Account exists AND is verified
+      return res.status(400).json({
+        message: "User already exists and is verified. Please log in.",
+      });
+    }
+
+    // 🟢 Case 3: Completely New User Creation
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
     const user = await User.create({
       name,
@@ -42,7 +80,6 @@ const register = async (req, res) => {
       verificationTokenExpires,
     });
 
-    // Verification URL Construct
     const baseUrl =
       process.env.BACKEND_URL || `${req.protocol}://${req.get("host")}`;
     const verifyUrl = `${baseUrl}/api/auth/verify-email?token=${verificationToken}&id=${user._id}`;
@@ -205,13 +242,11 @@ const updateProfile = async (req, res) => {
       isPro,
     } = req.body;
 
-    // 1. Basic details & Avatar update
     if (name) user.name = name;
     if (email) user.email = email;
     if (profileImage !== undefined) user.profileImage = profileImage;
     if (avatar !== undefined) user.avatar = avatar;
 
-    // 2. Plan / Subscription Tier Direct Update
     if (subscriptionTier !== undefined) {
       user.subscriptionTier = subscriptionTier;
       user.isPro = subscriptionTier === "pro";
@@ -220,7 +255,6 @@ const updateProfile = async (req, res) => {
       user.isPro = isPro;
     }
 
-    // 3. Health metrics update
     const numAge = age !== undefined ? Number(age) : user.age;
     const numWeight = weight !== undefined ? Number(weight) : user.weight;
     const numHeight = height !== undefined ? Number(height) : user.height;
@@ -233,7 +267,6 @@ const updateProfile = async (req, res) => {
     if (userGender) user.gender = userGender;
     if (userGoal) user.goal = userGoal;
 
-    // 4. Calorie & Macro recalculation
     let targetCalories = user.dailyCalories || user.dailyCalorieGoal || 2000;
     const manualCalorieGoal = calorieTarget || dailyCalorieGoal;
 
