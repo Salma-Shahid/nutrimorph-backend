@@ -1,11 +1,16 @@
-const User = require("../models/User");
+const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const User = require("../models/User");
+const sendEmail = require("../utils/sendEmail");
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
 };
 
+// @desc    Register new user & send verification email
+// @route   POST /api/auth/register
+// @access  Public
 const register = async (req, res) => {
   try {
     const { name, email, password } = req.body;
@@ -18,28 +23,93 @@ const register = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // Generate Verification Token & Expiration (24 Hours)
+    const verificationToken = crypto.randomBytes(32).toString("hex");
+    const verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000;
+
     const user = await User.create({
       name,
       email,
       password: hashedPassword,
       subscriptionTier: "free",
       isPro: false,
+      isVerified: false,
+      verificationToken,
+      verificationTokenExpires,
+    });
+
+    // Verification URL Construct
+    const verifyUrl = `${process.env.BACKEND_URL}/api/auth/verify-email?token=${verificationToken}&id=${user._id}`;
+
+    const emailTemplate = `
+      <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+        <h2>Welcome to NutriMorph, ${name}! 🎉</h2>
+        <p>Thank you for signing up. Please verify your email address to activate your account.</p>
+        <a href="${verifyUrl}" style="background-color: #10B981; color: white; padding: 12px 20px; text-decoration: none; border-radius: 6px; display: inline-block; margin-top: 10px;">Verify Email Address</a>
+        <p style="margin-top: 20px; color: #666; font-size: 12px;">This link will expire in 24 hours.</p>
+      </div>
+    `;
+
+    await sendEmail({
+      email: user.email,
+      subject: "NutriMorph - Email Verification",
+      html: emailTemplate,
     });
 
     res.status(201).json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      isOnboarded: user.isOnboarded,
-      subscriptionTier: user.subscriptionTier,
-      isPro: user.isPro,
-      token: generateToken(user._id),
+      success: true,
+      message:
+        "Registration successful! Please check your email to verify your account.",
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
+// @desc    Verify User Email Token
+// @route   GET /api/auth/verify-email
+// @access  Public
+const verifyEmail = async (req, res) => {
+  try {
+    const { token, id } = req.query;
+
+    if (!token || !id) {
+      return res
+        .status(400)
+        .send("<h3>Invalid verification link parameters.</h3>");
+    }
+
+    const user = await User.findOne({
+      _id: id,
+      verificationToken: token,
+      verificationTokenExpires: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res
+        .status(400)
+        .send("<h3>Invalid or expired verification link.</h3>");
+    }
+
+    user.isVerified = true;
+    user.verificationToken = undefined;
+    user.verificationTokenExpires = undefined;
+    await user.save();
+
+    res.send(`
+      <div style="text-align: center; font-family: Arial, sans-serif; padding: 50px;">
+        <h1 style="color: #10B981;">Email Verified Successfully! 🎉</h1>
+        <p>Your account is active now. You can close this tab and log in to the app.</p>
+      </div>
+    `);
+  } catch (error) {
+    res.status(500).send("<h3>Server error during email verification.</h3>");
+  }
+};
+
+// @desc    Authenticate user & get token
+// @route   POST /api/auth/login
+// @access  Public
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -52,6 +122,14 @@ const login = async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
+    }
+
+    // Email Verification Guard Check
+    if (!user.isVerified) {
+      return res.status(403).json({
+        isVerified: false,
+        message: "Please verify your email address before logging in.",
+      });
     }
 
     res.json({
@@ -183,6 +261,7 @@ const updateProfile = async (req, res) => {
 
 module.exports = {
   register,
+  verifyEmail,
   login,
   getMe,
   updateProfile,

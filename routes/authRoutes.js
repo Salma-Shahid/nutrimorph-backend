@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const {
   register,
+  verifyEmail,
   login,
   getMe,
   updateProfile,
@@ -9,9 +10,8 @@ const {
 const { protect } = require("../middlewares/authMiddleware");
 
 router.post("/register", register);
+router.get("/verify-email", verifyEmail);
 router.post("/login", login);
-
-// Protected Routes
 router.get("/me", protect, getMe);
 router.put("/profile", protect, updateProfile);
 

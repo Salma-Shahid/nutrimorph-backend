@@ -7,14 +7,14 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // 1. AI Text Analysis
 const analyzeMealText = async (req, res) => {
   try {
-    // 🔒 Pro User Check
     if (
       req.user?.subscriptionTier !== "pro" &&
       process.env.NODE_ENV === "production"
     ) {
       return res.status(403).json({
         success: false,
-        message: "This feature is only available for Pro Users. Please upgrade to access it.",
+        message:
+          "This feature is only available for Pro Users. Please upgrade to access it.",
       });
     }
 
@@ -33,13 +33,9 @@ const analyzeMealText = async (req, res) => {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-
-    // Standard Gemini Flash Model
     const model = genAI.getGenerativeModel({
       model: "gemini-3.5-flash-lite",
-      generationConfig: {
-        temperature: 0.2,
-      },
+      generationConfig: { temperature: 0.2 },
     });
 
     const prompt = `You are a nutrition assistant. Calculate standard serving values for: "${text}".
@@ -81,14 +77,14 @@ JSON Schema:
 const analyzeMealImage = async (req, res, next) => {
   console.log("📥 AI Scan request received at backend!");
   try {
-    // 🔒 Pro User Check (Development environment mein bypass rahega)
     if (
       req.user?.subscriptionTier !== "pro" &&
       process.env.NODE_ENV === "production"
     ) {
       return res.status(403).json({
         success: false,
-        message: "This feature is only available for Pro Users. Please upgrade to access it.",
+        message:
+          "This feature is only available for Pro Users. Please upgrade to access it.",
       });
     }
 
@@ -112,29 +108,47 @@ const analyzeMealImage = async (req, res, next) => {
   }
 };
 
-// 3. Get Today's Meals & Summary
+// 3. Get Today's Meals & Summary (Fixed Timezone / Day Boundary)
 const getDailySummary = async (req, res) => {
   try {
     const { date } = req.query;
-    const targetDate = date ? new Date(date) : new Date();
+    let startOfDay, endOfDay;
 
-    const startOfDay = new Date(targetDate);
-    startOfDay.setHours(0, 0, 0, 0);
+    if (date) {
+      const parts = date.split("-");
+      if (parts.length === 3) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
 
-    const endOfDay = new Date(targetDate);
-    endOfDay.setHours(23, 59, 59, 999);
+        startOfDay = new Date(year, month, day, 0, 0, 0, 0);
+        endOfDay = new Date(year, month, day, 23, 59, 59, 999);
+      } else {
+        const targetDate = new Date(date);
+        startOfDay = new Date(targetDate.setHours(0, 0, 0, 0));
+        endOfDay = new Date(targetDate.setHours(23, 59, 59, 999));
+      }
+    } else {
+      startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+
+      endOfDay = new Date();
+      endOfDay.setHours(23, 59, 59, 999);
+    }
+
+    const userId = req.user._id || req.user.id;
 
     const meals = await Meal.find({
-      userId: req.user._id || req.user.id,
+      $or: [{ userId: userId }, { user: userId }],
       createdAt: { $gte: startOfDay, $lte: endOfDay },
-    });
+    }).sort({ createdAt: -1 });
 
     const summary = meals.reduce(
       (acc, meal) => {
-        acc.calories += meal.calories || 0;
-        acc.protein += meal.protein || 0;
-        acc.carbs += meal.carbs || 0;
-        acc.fats += meal.fats || 0;
+        acc.calories += Number(meal.calories) || 0;
+        acc.protein += Number(meal.protein) || 0;
+        acc.carbs += Number(meal.carbs) || 0;
+        acc.fats += Number(meal.fats) || 0;
         return acc;
       },
       { calories: 0, protein: 0, carbs: 0, fats: 0 },
@@ -161,7 +175,10 @@ const getWeeklySummary = async (req, res) => {
     const weeklyData = await Meal.aggregate([
       {
         $match: {
-          userId: new mongoose.Types.ObjectId(userId),
+          $or: [
+            { userId: new mongoose.Types.ObjectId(userId) },
+            { user: new mongoose.Types.ObjectId(userId) },
+          ],
           createdAt: { $gte: sevenDaysAgo },
         },
       },
