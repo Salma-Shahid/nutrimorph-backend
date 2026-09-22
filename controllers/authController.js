@@ -3,6 +3,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
+const connectDB = require("../config/db"); // Note: Apni file location ke hisab se path set karein (e.g. "../db")
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
@@ -13,6 +14,9 @@ const generateToken = (id) => {
 // @access  Public
 const register = async (req, res) => {
   try {
+    // 🟢 Ensure MongoDB Connection before executing query
+    await connectDB();
+
     const { name, email, password } = req.body;
 
     const userExists = await User.findOne({ email });
@@ -39,7 +43,9 @@ const register = async (req, res) => {
     });
 
     // Verification URL Construct
-    const verifyUrl = `${process.env.BACKEND_URL}/api/auth/verify-email?token=${verificationToken}&id=${user._id}`;
+    const baseUrl =
+      process.env.BACKEND_URL || `${req.protocol}://${req.get("host")}`;
+    const verifyUrl = `${baseUrl}/api/auth/verify-email?token=${verificationToken}&id=${user._id}`;
 
     const emailTemplate = `
       <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
@@ -62,7 +68,8 @@ const register = async (req, res) => {
         "Registration successful! Please check your email to verify your account.",
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error("Register Error:", error);
+    res.status(500).json({ message: error.message || "Registration failed" });
   }
 };
 
@@ -71,6 +78,8 @@ const register = async (req, res) => {
 // @access  Public
 const verifyEmail = async (req, res) => {
   try {
+    await connectDB();
+
     const { token, id } = req.query;
 
     if (!token || !id) {
@@ -103,6 +112,7 @@ const verifyEmail = async (req, res) => {
       </div>
     `);
   } catch (error) {
+    console.error("Verify Email Error:", error);
     res.status(500).send("<h3>Server error during email verification.</h3>");
   }
 };
@@ -112,6 +122,8 @@ const verifyEmail = async (req, res) => {
 // @access  Public
 const login = async (req, res) => {
   try {
+    await connectDB();
+
     const { email, password } = req.body;
 
     const user = await User.findOne({ email });
@@ -148,6 +160,7 @@ const login = async (req, res) => {
       token: generateToken(user._id),
     });
   } catch (error) {
+    console.error("Login Error:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -157,6 +170,7 @@ const login = async (req, res) => {
 // @access  Private
 const getMe = async (req, res) => {
   try {
+    await connectDB();
     res.status(200).json(req.user);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -168,6 +182,8 @@ const getMe = async (req, res) => {
 // @access  Private
 const updateProfile = async (req, res) => {
   try {
+    await connectDB();
+
     const user = await User.findById(req.user._id);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -195,7 +211,7 @@ const updateProfile = async (req, res) => {
     if (profileImage !== undefined) user.profileImage = profileImage;
     if (avatar !== undefined) user.avatar = avatar;
 
-    // 2. Plan / Subscription Tier Direct Update (MongoDB Atlas Fix)
+    // 2. Plan / Subscription Tier Direct Update
     if (subscriptionTier !== undefined) {
       user.subscriptionTier = subscriptionTier;
       user.isPro = subscriptionTier === "pro";
@@ -217,9 +233,8 @@ const updateProfile = async (req, res) => {
     if (userGender) user.gender = userGender;
     if (userGoal) user.goal = userGoal;
 
-    // 4. Calorie & Macro recalculation / override
+    // 4. Calorie & Macro recalculation
     let targetCalories = user.dailyCalories || user.dailyCalorieGoal || 2000;
-
     const manualCalorieGoal = calorieTarget || dailyCalorieGoal;
 
     if (manualCalorieGoal) {
@@ -240,7 +255,6 @@ const updateProfile = async (req, res) => {
     user.dailyCalories = targetCalories;
     user.dailyCalorieGoal = targetCalories;
 
-    // Recalculate Macros based on target calories
     user.macros = {
       protein: Math.round((targetCalories * 0.3) / 4),
       carbs: Math.round((targetCalories * 0.4) / 4),
@@ -255,6 +269,7 @@ const updateProfile = async (req, res) => {
 
     res.status(200).json(userResponse);
   } catch (error) {
+    console.error("Update Profile Error:", error);
     res.status(500).json({ message: error.message });
   }
 };
