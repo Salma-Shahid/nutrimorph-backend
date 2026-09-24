@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const ChatMessage = require("../models/ChatMessage"); // 🟢 ChatMessage Model Import
 const sendEmail = require("../utils/sendEmail");
 const connectDB = require("../config/db");
 
@@ -307,10 +308,56 @@ const updateProfile = async (req, res) => {
   }
 };
 
+// @desc    Delete User Account & Cascade Delete Associated Data
+// @route   DELETE /api/auth/me
+// @access  Private
+const deleteAccount = async (req, res) => {
+  try {
+    await connectDB();
+
+    const userId = req.user?._id || req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "User not authenticated.",
+      });
+    }
+
+    // 1. Cascade delete all user chat history from MongoDB
+    await ChatMessage.deleteMany({
+      $or: [{ user: userId }, { userId: userId }],
+    });
+
+    // 2. Delete user profile record from MongoDB
+    const deletedUser = await User.findByIdAndDelete(userId);
+
+    if (!deletedUser) {
+      return res.status(404).json({
+        success: false,
+        message: "User record not found.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Your account and all associated data have been permanently deleted.",
+    });
+  } catch (error) {
+    console.error("Delete Account Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to delete account. Try again.",
+    });
+  }
+};
+
 module.exports = {
   register,
   verifyEmail,
   login,
   getMe,
   updateProfile,
+  deleteAccount,
 };

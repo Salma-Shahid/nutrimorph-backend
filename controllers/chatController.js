@@ -1,6 +1,7 @@
 const ChatMessage = require("../models/ChatMessage");
 const User = require("../models/User");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const connectDB = require("../config/db"); // 🟢 Database Connection Import
 
 // Initialize Google Generative AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -10,6 +11,9 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
  */
 const handleChat = async (req, res) => {
   try {
+    // 🟢 Ensure MongoDB is connected first
+    await connectDB();
+
     const rawUser = req.user;
     const { message, model } = req.body;
 
@@ -23,7 +27,7 @@ const handleChat = async (req, res) => {
 
     const userId = rawUser._id || rawUser.id;
 
-    // Fetch fresh user data directly from MongoDB to guarantee accurate subscription and profile state
+    // Fetch fresh user data directly from MongoDB
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
@@ -58,7 +62,7 @@ const handleChat = async (req, res) => {
       });
     }
 
-    // Construct User Profile Details Context (Ground Truth Data)
+    // Construct User Profile Details Context (Safe Optional Fallbacks)
     const userProfileContext = [
       `User Name: ${user.name || user.username || "Member"}`,
       `Subscription Plan: ${currentTier.toUpperCase()} (${isFreeTier ? "Free Tier Plan" : "Pro Plan Active"})`,
@@ -68,29 +72,28 @@ const handleChat = async (req, res) => {
         user.calorieTarget ||
         user.dailyCalorieGoal ||
         user.dailyCalories ||
-        "Not set"
+        "2000"
       } kcal`,
       `Dietary Preferences: ${user.dietaryPreferences || user.dietType || "None specified"}`,
       `Current Weight: ${user.weight ? `${user.weight} kg` : "Not provided"}`,
       `Height: ${user.height ? `${user.height} cm` : "Not provided"}`,
     ].join("\n");
 
-    // Fetch recent chat history from MongoDB for multi-turn conversational context (Last 10 messages)
-    // Deterministic sorting with createdAt and _id
+    // Fetch recent chat history from MongoDB
     const recentMessages = await ChatMessage.find({
       $or: [{ user: userId }, { userId: userId }],
     })
       .sort({ createdAt: -1, _id: -1 })
       .limit(10);
 
-    // Format chat history for Gemini chat API structure (oldest to newest)
+    // Format chat history for Gemini chat API structure
     const formattedHistory = recentMessages.reverse().map((msg) => ({
       role: msg.role === "bot" || msg.sender === "bot" ? "model" : "user",
       parts: [{ text: msg.text }],
     }));
 
-    // Configure Gemini AI Model (Defaulting to gemini-3.5-flash-lite)
-    const selectedModel = model || "gemini-3.5-flash-lite";
+    // Configure Gemini AI Model
+    const selectedModel = model || "gemini-1.5-flash";
     const geminiModel = genAI.getGenerativeModel({
       model: selectedModel,
       systemInstruction: `You are NutriBot, an expert AI nutritionist and fitness coach for the NutriMorph application.
@@ -100,9 +103,9 @@ GROUND TRUTH USER PROFILE CONTEXT:
 ${userProfileContext}
 
 STRICT INSTRUCTIONS:
-1. Ground Truth Rules: Always strictly adhere to the subscription plan and metrics given in the user profile context. If the user's plan is "FREE", NEVER state they are on "Pro". If they ask about their current plan or profile, report the context details accurately.
+1. Ground Truth Rules: Always strictly adhere to the subscription plan and metrics given in the user profile context.
 2. Domain Scope: Keep responses focused strictly on diet, nutrition, macro tracking, meal planning, workouts, and recipes.
-3. Personalization: Use the user's name, daily calorie goal, weight, height, and target goals naturally to personalize your advice.
+3. Personalization: Use the user's name, daily calorie goal, weight, height, and target goals naturally.
 4. Tone & Style: Be encouraging, concise, informative, and clear in English.`,
     });
 
@@ -120,8 +123,8 @@ STRICT INSTRUCTIONS:
     }
     await user.save();
 
-    // Sequential document creation ensures exact timestamp and ObjectId sequence
-    await ChatMessage.create({
+    // Save user & bot messages sequentially
+    const userMsgDoc = await ChatMessage.create({
       user: userId,
       userId: userId,
       role: "user",
@@ -129,7 +132,7 @@ STRICT INSTRUCTIONS:
       text: message.trim(),
     });
 
-    await ChatMessage.create({
+    const botMsgDoc = await ChatMessage.create({
       user: userId,
       userId: userId,
       role: "bot",
@@ -137,11 +140,13 @@ STRICT INSTRUCTIONS:
       text: responseText.trim(),
     });
 
-    // Return unified success payload to frontend
+    // Return unified success payload
     return res.status(200).json({
       success: true,
       reply: responseText,
       response: responseText,
+      userMessage: userMsgDoc,
+      botMessage: botMsgDoc,
       dailyChatCount: user.dailyChatCount,
       remainingChats: isFreeTier
         ? Math.max(0, 5 - user.dailyChatCount)
@@ -157,17 +162,19 @@ STRICT INSTRUCTIONS:
 };
 
 /**
- * Fetch Chat History for authenticated user in strict chronological order
+ * Fetch Chat History for authenticated user
  */
 const getChatHistory = async (req, res) => {
   try {
+    // 🟢 Ensure MongoDB is connected
+    await connectDB();
+
     const userId = req.user?._id || req.user?.id;
 
     if (!userId) {
       return res.status(401).json({ message: "User not authenticated." });
     }
 
-    // Strict chronological sort using createdAt and _id fallback
     const history = await ChatMessage.find({
       $or: [{ user: userId }, { userId: userId }],
     }).sort({ createdAt: 1, _id: 1 });
