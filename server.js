@@ -13,6 +13,7 @@ const globalErrorHandler = require("./middlewares/errorHandler");
 const { apiLimiter } = require("./middlewares/rateLimiter");
 const chatRoutes = require("./routes/chatRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
+const foodRoutes = require("./routes/foodRoutes");
 
 const app = express();
 
