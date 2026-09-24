@@ -108,39 +108,33 @@ const analyzeMealImage = async (req, res, next) => {
   }
 };
 
-// 3. Get Today's Meals & Summary (Fixed Timezone / Day Boundary)
+// 3. Get Today's Meals & Summary (Timezone Safe)
 const getDailySummary = async (req, res) => {
   try {
     const { date } = req.query;
-    let startOfDay, endOfDay;
-
-    if (date) {
-      const parts = date.split("-");
-      if (parts.length === 3) {
-        const year = parseInt(parts[0], 10);
-        const month = parseInt(parts[1], 10) - 1;
-        const day = parseInt(parts[2], 10);
-
-        startOfDay = new Date(year, month, day, 0, 0, 0, 0);
-        endOfDay = new Date(year, month, day, 23, 59, 59, 999);
-      } else {
-        const targetDate = new Date(date);
-        startOfDay = new Date(targetDate.setHours(0, 0, 0, 0));
-        endOfDay = new Date(targetDate.setHours(23, 59, 59, 999));
-      }
-    } else {
-      startOfDay = new Date();
-      startOfDay.setHours(0, 0, 0, 0);
-
-      endOfDay = new Date();
-      endOfDay.setHours(23, 59, 59, 999);
-    }
-
+    const targetDate = date || new Date().toLocaleDateString("en-CA");
     const userId = req.user._id || req.user.id;
+
+    // Parse targetDate boundaries for fallback on legacy records using createdAt
+    let startOfDay, endOfDay;
+    const parts = targetDate.split("-");
+    if (parts.length === 3) {
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+
+      startOfDay = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+      endOfDay = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
+    }
 
     const meals = await Meal.find({
       $or: [{ userId: userId }, { user: userId }],
-      createdAt: { $gte: startOfDay, $lte: endOfDay },
+      $or: [
+        { date: targetDate },
+        ...(startOfDay
+          ? [{ createdAt: { $gte: startOfDay, $lte: endOfDay } }]
+          : []),
+      ],
     }).sort({ createdAt: -1 });
 
     const summary = meals.reduce(
@@ -163,7 +157,7 @@ const getDailySummary = async (req, res) => {
   }
 };
 
-// 4. Get Weekly Summary
+// 4. Get Weekly Summary (Timezone Safe)
 const getWeeklySummary = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
@@ -184,7 +178,12 @@ const getWeeklySummary = async (req, res) => {
       },
       {
         $group: {
-          _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+          _id: {
+            $ifNull: [
+              "$date",
+              { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            ],
+          },
           calories: { $sum: "$calories" },
         },
       },
@@ -203,10 +202,10 @@ const getWeeklySummary = async (req, res) => {
   }
 };
 
-// 5. Log Meal
+// 5. Log Meal (Timezone Safe)
 const logMeal = async (req, res, next) => {
   try {
-    const { name, calories, protein, carbs, fats } = req.body;
+    const { name, calories, protein, carbs, fats, date } = req.body;
     const userId = req.user?._id || req.user?.id;
 
     if (!userId) {
@@ -214,6 +213,8 @@ const logMeal = async (req, res, next) => {
         new AppError("User not authenticated. Please log in again.", 401),
       );
     }
+
+    const userLocalDate = date || new Date().toLocaleDateString("en-CA");
 
     const meal = await Meal.create({
       userId: userId,
@@ -223,6 +224,7 @@ const logMeal = async (req, res, next) => {
       protein: Number(protein) || 0,
       carbs: Number(carbs) || 0,
       fats: Number(fats) || 0,
+      date: userLocalDate, // Saved in user local YYYY-MM-DD date format
     });
 
     res.status(201).json({
