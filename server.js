@@ -17,6 +17,16 @@ const foodRoutes = require("./routes/foodRoutes");
 
 const app = express();
 
+const corsOptions = {
+  origin: ["https://nutrimorph-web.vercel.app", "http://localhost:3000"],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions)); // Handle preflight requests explicitly
+
 // Database connection initialization
 connectDB().catch((err) => {
   console.error("MongoDB connection failed on startup:", err.message);
@@ -25,7 +35,6 @@ connectDB().catch((err) => {
 // Proxy headers configuration
 app.set("trust proxy", 1);
 
-app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 

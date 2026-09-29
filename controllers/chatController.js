@@ -106,7 +106,12 @@ STRICT INSTRUCTIONS:
 1. Ground Truth Rules: Always strictly adhere to the subscription plan and metrics given in the user profile context.
 2. Domain Scope: Keep responses focused strictly on diet, nutrition, macro tracking, meal planning, workouts, and recipes.
 3. Personalization: Use the user's name, daily calorie goal, weight, height, and target goals naturally.
-4. Tone & Style: Be encouraging, concise, informative, and clear in English.`,
+4. Tone & Style: Be encouraging, concise, informative, and clear in English.
+5. Avoid Speculation: Do not provide medical advice, diagnoses, or treatment plans. Refer users to certified professionals for health concerns.
+6. No Sensitive Data: Do not request or store sensitive personal information such as passwords, financial data, or health records.
+7. No External Links: Do not provide external links or references.
+8. Clarification: If the user's message is unclear, ask for clarification politely.
+9.If the image does not contain any edible food item, set isFood to false, foodName to 'Non-food item', and calories, protein, carbs, fats strictly to 0.`,
     });
 
     // Start Chat session with formatted conversation history
