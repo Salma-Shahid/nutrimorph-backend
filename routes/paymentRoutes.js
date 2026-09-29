@@ -16,6 +16,12 @@ router.post("/create-checkout-session", protect, async (req, res) => {
       });
     }
 
+    const { plan, billingCycle } = req.body; // Frontend se plan aur cycle receive karein
+
+    const isYearly = billingCycle === "yearly";
+    const unitAmount = isYearly ? 9900 : 999; // $99/yr ya $9.99/mo
+    const interval = isYearly ? "year" : "month";
+
     const serverUrl =
       process.env.SERVER_URL ||
       `${req.protocol}://${req.get("host")}` ||
@@ -29,17 +35,17 @@ router.post("/create-checkout-session", protect, async (req, res) => {
           price_data: {
             currency: "usd",
             product_data: {
-              name: "NutriMorph Pro Nutritionist",
+              name: `NutriMorph Pro Nutritionist (${isYearly ? "Yearly" : "Monthly"})`,
               description: "Unlimited AI Chat, Camera Scanner & Analytics",
             },
-            unit_amount: 999,
-            recurring: { interval: "month" },
+            unit_amount: unitAmount,
+            recurring: { interval: interval },
           },
           quantity: 1,
         },
       ],
       customer_email: req.user.email,
-      success_url: `${serverUrl}/api/payment/success?userId=${req.user._id}`,
+      success_url: `${serverUrl}/api/payment/success?userId=${req.user._id}&billing=${billingCycle}`,
       cancel_url: `${serverUrl}/api/payment/cancel`,
     });
 
@@ -52,12 +58,15 @@ router.post("/create-checkout-session", protect, async (req, res) => {
 // 2. Success Redirect (MongoDB Auto Update)
 router.get("/success", async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, billing } = req.query;
 
     if (userId) {
+      const days = billing === "yearly" ? 365 : 30;
       await User.findByIdAndUpdate(userId, {
         subscriptionTier: "pro",
-        subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 Days
+        subscriptionExpiresAt: new Date(
+          Date.now() + days * 24 * 60 * 60 * 1000,
+        ),
       });
     }
 
