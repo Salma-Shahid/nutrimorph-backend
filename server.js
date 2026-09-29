@@ -25,7 +25,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options(/(.*)/, cors(corsOptions)); // Handle preflight requests explicitly
+app.options(/(.*)/, cors(corsOptions));
 
 // Database connection initialization
 connectDB().catch((err) => {
