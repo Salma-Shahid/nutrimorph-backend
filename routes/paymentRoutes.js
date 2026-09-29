@@ -7,7 +7,7 @@ const { protect } = require("../middlewares/authMiddleware");
 const stripeKey = process.env.STRIPE_SECRET_KEY || "sk_test_dummy_key_for_dev";
 const stripe = Stripe(stripeKey);
 
-// 1. Create Checkout Session
+// 1. Create Checkout Session for Pro Plan
 router.post("/create-checkout-session", protect, async (req, res) => {
   try {
     if (!process.env.STRIPE_SECRET_KEY) {
@@ -16,10 +16,10 @@ router.post("/create-checkout-session", protect, async (req, res) => {
       });
     }
 
-    const { plan, billingCycle } = req.body; // Frontend se plan aur cycle receive karein
+    const { plan, billingCycle } = req.body;
 
     const isYearly = billingCycle === "yearly";
-    const unitAmount = isYearly ? 9900 : 999; // $99/yr ya $9.99/mo
+    const unitAmount = isYearly ? 9900 : 999; // $99/yr or $9.99/mo
     const interval = isYearly ? "year" : "month";
 
     const serverUrl =
@@ -55,7 +55,7 @@ router.post("/create-checkout-session", protect, async (req, res) => {
   }
 });
 
-// 2. Success Redirect (MongoDB Auto Update)
+// 2. Success Redirect (MongoDB Auto Update for Pro)
 router.get("/success", async (req, res) => {
   try {
     const { userId, billing } = req.query;
@@ -64,6 +64,7 @@ router.get("/success", async (req, res) => {
       const days = billing === "yearly" ? 365 : 30;
       await User.findByIdAndUpdate(userId, {
         subscriptionTier: "pro",
+        isPro: true,
         subscriptionExpiresAt: new Date(
           Date.now() + days * 24 * 60 * 60 * 1000,
         ),
@@ -107,13 +108,47 @@ router.post("/verify-payment", protect, async (req, res) => {
   }
 });
 
-// 5. Downgrade / Switch to Free Plan
+// 5. Update / Switch Plan Route (Handles Free & Pro direct switching)
+router.post("/update-plan", protect, async (req, res) => {
+  try {
+    const { plan, aiModel } = req.body; // e.g. "Free" or "Pro"
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found." });
+    }
+
+    const isProTier = plan && plan.toLowerCase() === "pro";
+
+    user.subscriptionTier = isProTier ? "pro" : "free";
+    user.isPro = isProTier;
+    user.subscriptionExpiresAt = isProTier
+      ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      : null;
+
+    await user.save();
+
+    res.json({
+      success: true,
+      message: `Subscription successfully updated to ${plan} Plan!`,
+      user,
+      aiModel: aiModel || "gemini-3.5-flash-lite",
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 6. Downgrade / Switch to Free Plan (Legacy route support)
 router.post("/switch-to-free", protect, async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
     user.subscriptionTier = "free";
+    user.isPro = false;
     user.subscriptionExpiresAt = null;
     await user.save();
 
