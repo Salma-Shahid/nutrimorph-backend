@@ -108,31 +108,37 @@ router.post("/verify-payment", protect, async (req, res) => {
   }
 });
 
-// 5. Update / Switch Plan Route (Handles Free & Pro direct switching)
+// 5. Update / Switch Plan Route (Only allowed for Free plan direct switch)
 router.post("/update-plan", protect, async (req, res) => {
   try {
-    const { plan, aiModel } = req.body; // e.g. "Free" or "Pro"
-    const user = await User.findById(req.user._id);
+    const { plan, aiModel } = req.body;
 
+    // 🔴 Security Check: Pro plan direct update allow nahi hai, uske liye Stripe checkout zaroori hai
+    if (plan && plan.toLowerCase() === "pro") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Pro plan activation requires payment. Please use the checkout session.",
+      });
+    }
+
+    const user = await User.findById(req.user._id);
     if (!user) {
       return res
         .status(404)
         .json({ success: false, message: "User not found." });
     }
 
-    const isProTier = plan && plan.toLowerCase() === "pro";
-
-    user.subscriptionTier = isProTier ? "pro" : "free";
-    user.isPro = isProTier;
-    user.subscriptionExpiresAt = isProTier
-      ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-      : null;
+    // Yeh endpoint ab sirf Free plan mein switch karne ke liye kaam karega
+    user.subscriptionTier = "free";
+    user.isPro = false;
+    user.subscriptionExpiresAt = null;
 
     await user.save();
 
     res.json({
       success: true,
-      message: `Subscription successfully updated to ${plan} Plan!`,
+      message: "Subscription successfully updated to Free Plan!",
       user,
       aiModel: aiModel || "gemini-3.5-flash-lite",
     });
