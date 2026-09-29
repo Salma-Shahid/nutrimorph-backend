@@ -16,7 +16,6 @@ router.post("/create-checkout-session", protect, async (req, res) => {
       });
     }
 
-    // Dynamic Server URL (Vercel ya Local Host)
     const serverUrl =
       process.env.SERVER_URL ||
       `${req.protocol}://${req.get("host")}` ||
@@ -63,10 +62,10 @@ router.get("/success", async (req, res) => {
     }
 
     res.send(`
-      <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif;">
+      <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; height: 100vh;">
         <h1 style="color: #22c55e;">🎉 Payment Successful!</h1>
-        <p style="font-size: 18px; color: #333;">Aap ka Pro Plan active ho chuka hai.</p>
-        <p style="color: #666;">Aap window close karke App restart kar sakti hain.</p>
+        <p style="font-size: 18px; color: #cbd5e1;">Your Pro Plan is now active.</p>
+        <p style="color: #94a3b8;">You can close this window and restart the app.</p>
       </div>
     `);
   } catch (error) {
@@ -77,9 +76,9 @@ router.get("/success", async (req, res) => {
 // 3. Cancel Route
 router.get("/cancel", (req, res) => {
   res.send(`
-    <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif;">
+    <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; height: 100vh;">
       <h1 style="color: #ef4444;">❌ Payment Cancelled</h1>
-      <p style="font-size: 18px; color: #333;">Payment complete nahi ho saki.</p>
+      <p style="font-size: 18px; color: #cbd5e1;">Your payment was cancelled.</p>
     </div>
   `);
 });
@@ -90,7 +89,6 @@ router.post("/verify-payment", protect, async (req, res) => {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // Status fetch karke current user return karein
     res.json({
       success: true,
       user,

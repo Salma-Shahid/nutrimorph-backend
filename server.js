@@ -17,6 +17,7 @@ const foodRoutes = require("./routes/foodRoutes");
 
 const app = express();
 
+// Global CORS Configuration
 const corsOptions = {
   origin: ["https://nutrimorph-web.vercel.app", "http://localhost:3000"],
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -25,7 +26,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options(/(.*)/, cors(corsOptions));
 
 // Database connection initialization
 connectDB().catch((err) => {
@@ -37,12 +37,6 @@ app.set("trust proxy", 1);
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
-
-// Incoming request logging
-// app.use((req, res, next) => {
-//   console.log(`📩 Incoming Request: ${req.method} ${req.url}`);
-//   next();
-// });
 
 // Apply General Rate Limiting
 app.use("/api", apiLimiter);
