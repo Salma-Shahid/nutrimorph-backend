@@ -16,10 +16,10 @@ const paymentRoutes = require("./routes/paymentRoutes");
 const foodRoutes = require("./routes/foodRoutes");
 const savedMealsRoutes = require("./routes/savedMealsRoutes"); // Import the saved meals routes
 
+const app = express();
+
 // Use the saved meals routes
 app.use("/api/saved-meals", savedMealsRoutes);
-
-const app = express();
 
 // Global CORS Configuration
 const corsOptions = {

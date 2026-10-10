@@ -1,12 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const SavedMeal = require("../models/SavedMeal");
-// Aapke project mein auth middleware ka jo bhi naam ya path ho, usay yahan import kar lein
-const auth =
-  require("../middleware/auth") || require("../middleware/authMiddleware");
+const { protect } = require("../middlewares/authMiddleware");
 
 // 1. Get all saved meals for the logged-in user
-router.get("/", auth, async (req, res) => {
+router.get("/", protect, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
     const meals = await SavedMeal.find({ userId }).sort({ createdAt: -1 });
@@ -17,7 +15,7 @@ router.get("/", auth, async (req, res) => {
 });
 
 // 2. Save a new recipe / meal
-router.post("/", auth, async (req, res) => {
+router.post("/", protect, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
     const { name, calories, protein, carbs, fats } = req.body;
@@ -45,7 +43,7 @@ router.post("/", auth, async (req, res) => {
 });
 
 // 3. Delete a saved recipe
-router.delete("/:id", auth, async (req, res) => {
+router.delete("/:id", protect, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
     const mealId = req.params.id;
