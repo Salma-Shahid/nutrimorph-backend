@@ -14,6 +14,10 @@ const { apiLimiter } = require("./middlewares/rateLimiter");
 const chatRoutes = require("./routes/chatRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const foodRoutes = require("./routes/foodRoutes");
+const savedMealsRoutes = require("./routes/savedMealsRoutes"); // Import the saved meals routes
+
+// Use the saved meals routes
+app.use("/api/saved-meals", savedMealsRoutes);
 
 const app = express();
 

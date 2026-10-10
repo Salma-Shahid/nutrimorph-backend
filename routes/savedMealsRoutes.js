@@ -1,0 +1,70 @@
+const express = require("express");
+const router = express.Router();
+const SavedMeal = require("../models/SavedMeal");
+// Aapke project mein auth middleware ka jo bhi naam ya path ho, usay yahan import kar lein
+const auth =
+  require("../middleware/auth") || require("../middleware/authMiddleware");
+
+// 1. Get all saved meals for the logged-in user
+router.get("/", auth, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    const meals = await SavedMeal.find({ userId }).sort({ createdAt: -1 });
+    res.json({ success: true, data: meals });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 2. Save a new recipe / meal
+router.post("/", auth, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    const { name, calories, protein, carbs, fats } = req.body;
+
+    if (!name) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Meal name is required" });
+    }
+
+    const newMeal = new SavedMeal({
+      userId,
+      name,
+      calories: calories || 0,
+      protein: protein || 0,
+      carbs: carbs || 0,
+      fats: fats || 0,
+    });
+
+    await newMeal.save();
+    res.status(201).json({ success: true, data: newMeal });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 3. Delete a saved recipe
+router.delete("/:id", auth, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    const mealId = req.params.id;
+
+    const deletedMeal = await SavedMeal.findOneAndDelete({
+      _id: mealId,
+      userId,
+    });
+
+    if (!deletedMeal) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Saved recipe not found" });
+    }
+
+    res.json({ success: true, message: "Recipe deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+module.exports = router;
