@@ -15,6 +15,7 @@ router.get("/", protect, async (req, res) => {
 });
 
 // 2. Save a new recipe / meal
+// 2. Save a new recipe / meal (with duplicate check to prevent 500 errors)
 router.post("/", protect, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
@@ -26,9 +27,23 @@ router.post("/", protect, async (req, res) => {
         .json({ success: false, message: "Meal name is required" });
     }
 
+    const trimmedName = name.trim();
+
+    // Check if recipe already exists for this user
+    let existingMeal = await SavedMeal.findOne({ userId, name: trimmedName });
+    if (existingMeal) {
+      return res
+        .status(200)
+        .json({
+          success: true,
+          data: existingMeal,
+          message: "Recipe already saved",
+        });
+    }
+
     const newMeal = new SavedMeal({
       userId,
-      name,
+      name: trimmedName,
       calories: calories || 0,
       protein: protein || 0,
       carbs: carbs || 0,
@@ -38,6 +53,7 @@ router.post("/", protect, async (req, res) => {
     await newMeal.save();
     res.status(201).json({ success: true, data: newMeal });
   } catch (error) {
+    console.error("Save recipe error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 });
