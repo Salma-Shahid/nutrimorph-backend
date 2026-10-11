@@ -15,11 +15,16 @@ router.get("/", protect, async (req, res) => {
 });
 
 // 2. Save a new recipe / meal
-// 2. Save a new recipe / meal (with duplicate check to prevent 500 errors)
 router.post("/", protect, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
-    const { name, calories, protein, carbs, fats } = req.body;
+
+    // Safely extract from req.body (handles missing body gracefully)
+    const name = req.body?.name;
+    const calories = req.body?.calories || 0;
+    const protein = req.body?.protein || 0;
+    const carbs = req.body?.carbs || 0;
+    const fats = req.body?.fats || 0;
 
     if (!name) {
       return res
@@ -44,10 +49,10 @@ router.post("/", protect, async (req, res) => {
     const newMeal = new SavedMeal({
       userId,
       name: trimmedName,
-      calories: calories || 0,
-      protein: protein || 0,
-      carbs: carbs || 0,
-      fats: fats || 0,
+      calories: Number(calories),
+      protein: Number(protein),
+      carbs: Number(carbs),
+      fats: Number(fats),
     });
 
     await newMeal.save();
