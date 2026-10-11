@@ -21,7 +21,7 @@ router.post("/", protect, async (req, res) => {
     if (!userId) {
       return res
         .status(401)
-        .json({ success: false, message: "Not authorized, user missing" });
+        .json({ success: false, message: "Not authorized" });
     }
 
     const { name, calories, protein, carbs, fats } = req.body;
@@ -33,14 +33,10 @@ router.post("/", protect, async (req, res) => {
 
     const trimmedName = name.trim();
 
-    // Check if recipe already exists for this user
+    // Prevent duplicate entries for the same user
     let existingMeal = await SavedMeal.findOne({ userId, name: trimmedName });
     if (existingMeal) {
-      return res.status(200).json({
-        success: true,
-        data: existingMeal,
-        message: "Recipe already saved",
-      });
+      return res.status(200).json({ success: true, data: existingMeal });
     }
 
     const newMeal = new SavedMeal({
@@ -56,7 +52,7 @@ router.post("/", protect, async (req, res) => {
     res.status(201).json({ success: true, data: newMeal });
   } catch (error) {
     console.error("Save recipe error:", error.message);
-    res.status(400).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
