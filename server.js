@@ -18,9 +18,6 @@ const savedMealsRoutes = require("./routes/savedMealsRoutes"); // Import the sav
 
 const app = express();
 
-// Use the saved meals routes
-app.use("/api/saved-meals", savedMealsRoutes);
-
 // Global CORS Configuration
 const corsOptions = {
   origin: ["https://nutrimorph-web.vercel.app", "http://localhost:3000"],
@@ -52,7 +49,7 @@ app.use("/api/water", waterRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/food", foodRoutes);
-
+app.use("/api/saved-meals", savedMealsRoutes);
 app.get("/", (req, res) => {
   res.send("NutriMorph Backend Running...");
 });
