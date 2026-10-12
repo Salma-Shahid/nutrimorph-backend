@@ -1,4 +1,5 @@
 const MealPlan = require("../models/MealPlan");
+const User = require("../models/User");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { z } = require("zod");
 
@@ -29,10 +30,31 @@ const MealPlanResponseSchema = z.object({
   days: z.array(DayPlanSchema),
 });
 
-// Generate Custom Meal Plan using Gemini AI (3, 5, 7, 15, or 30 days) with Zod Validation
+// Generate Custom Meal Plan using Gemini AI (Pro Users Only + Zod Validation)
 const generateMealPlan = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
+
+    // Fetch fresh user data to verify Subscription Tier
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found in the system.",
+      });
+    }
+
+    const currentTier = (user.subscriptionTier || "free").toLowerCase();
+
+    // Pro Subscription Guard Check
+    if (currentTier !== "pro" && process.env.NODE_ENV === "production") {
+      return res.status(403).json({
+        success: false,
+        message:
+          "AI Meal Planner is a Pro feature. Please upgrade your plan to access custom meal generation.",
+      });
+    }
+
     const { goal, dietType, targetCalories, duration = 7 } = req.body;
 
     const apiKey = process.env.GEMINI_API_KEY;
@@ -95,7 +117,7 @@ JSON Schema:
       throw new Error("AI returned malformed JSON format");
     }
 
-    // 2. Validate parsed output against Zod Schema
+    // Validate parsed output against Zod Schema
     const validationResult = MealPlanResponseSchema.safeParse(parsedJSON);
     if (!validationResult.success) {
       console.error(
