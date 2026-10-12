@@ -1,11 +1,11 @@
 const MealPlan = require("../models/MealPlan");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// Generate 7-Day Custom Meal Plan using Gemini AI
+// Generate Custom Meal Plan using Gemini AI (3, 5, 7, 15, or 30 days)
 const generateMealPlan = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
-    const { goal, dietType, targetCalories } = req.body;
+    const { goal, dietType, targetCalories, duration = 7 } = req.body;
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -20,20 +20,24 @@ const generateMealPlan = async (req, res) => {
       generationConfig: { temperature: 0.3 },
     });
 
-    const prompt = `You are a professional nutritionist. Generate a 7-day custom meal plan for a user with the following goals:
+    const prompt = `You are a professional nutritionist. Generate a personalized ${duration}-day custom meal plan for a user with the following goals:
 - Goal: ${goal || "weight_loss"}
 - Diet Preference: ${dietType || "Desi / Pakistani Standard"}
 - Target Daily Calories: ${targetCalories || 2000} kcal
+- Plan Duration: Exactly ${duration} days
 
-Return ONLY a single valid JSON object with no markdown code blocks, no explanation text. Ensure all 7 days (Monday to Sunday) are included in the days array.
+Return ONLY a single valid JSON object with no markdown code blocks, no explanation text.
+Ensure the "days" array contains exactly ${duration} day objects (labeled "Day 1", "Day 2", up to "Day ${duration}").
+
 JSON Schema:
 {
   "goal": "${goal || "weight_loss"}",
   "dietType": "${dietType || "Desi / Pakistani Standard"}",
   "targetCalories": ${targetCalories || 2000},
+  "duration": ${duration},
   "days": [
     {
-      "day": "Monday",
+      "day": "Day 1",
       "meals": {
         "breakfast": { "name": "...", "calories": 400, "protein": 20, "carbs": 50, "fats": 10 },
         "lunch": { "name": "...", "calories": 600, "protein": 30, "carbs": 70, "fats": 15 },
@@ -72,7 +76,7 @@ JSON Schema:
 
     return res.status(200).json({
       success: true,
-      message: "Meal plan generated successfully",
+      message: `${duration}-Day meal plan generated successfully`,
       data: newMealPlan,
     });
   } catch (error) {
