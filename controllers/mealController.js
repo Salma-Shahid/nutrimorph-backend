@@ -115,7 +115,6 @@ const getDailySummary = async (req, res) => {
     const targetDate = date || new Date().toLocaleDateString("en-CA");
     const userId = req.user._id || req.user.id;
 
-    // Parse targetDate boundaries for fallback on legacy records using createdAt
     let startOfDay, endOfDay;
     const parts = targetDate.split("-");
     if (parts.length === 3) {
@@ -157,7 +156,7 @@ const getDailySummary = async (req, res) => {
   }
 };
 
-// 4. Get Weekly Summary (Timezone Safe)
+// 4. Get Weekly Summary & Gemini AI Insights
 const getWeeklySummary = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
@@ -181,18 +180,46 @@ const getWeeklySummary = async (req, res) => {
           _id: {
             $ifNull: [
               "$date",
-              { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+              { $dateToString: { format: "\%Y-\%m-\%d", date: "$createdAt" } },
             ],
           },
           calories: { $sum: "$calories" },
+          protein: { $sum: "$protein" },
+          carbs: { $sum: "$carbs" },
+          fats: { $sum: "$fats" },
         },
       },
       { $sort: { _id: 1 } },
     ]);
 
+    // Generate AI Insights using Gemini
+    let aiInsight =
+      "Keep tracking your daily meals consistently to achieve your health goals!";
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (apiKey) {
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({
+          model: "gemini-3.5-flash-lite",
+        });
+        const prompt = `Analyze this weekly nutrition summary data and provide a concise, encouraging 2-sentence health tip or insight in English: ${JSON.stringify(weeklyData)}`;
+
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text();
+        if (responseText) {
+          aiInsight = responseText.trim();
+        }
+      }
+    } catch (aiErr) {
+      console.log("Gemini weekly insight fallback used:", aiErr.message);
+    }
+
     res.status(200).json({
       success: true,
-      data: weeklyData,
+      data: {
+        weeklyHistory: weeklyData,
+        aiInsight,
+      },
     });
   } catch (error) {
     res.status(500).json({
@@ -224,7 +251,7 @@ const logMeal = async (req, res, next) => {
       protein: Number(protein) || 0,
       carbs: Number(carbs) || 0,
       fats: Number(fats) || 0,
-      date: userLocalDate, // Saved in user local YYYY-MM-DD date format
+      date: userLocalDate,
     });
 
     res.status(201).json({
@@ -241,7 +268,6 @@ const logMeal = async (req, res, next) => {
 const deleteMeal = async (req, res) => {
   try {
     const { id } = req.params;
-
     const meal = await Meal.findById(id);
 
     if (!meal) {
