@@ -15,6 +15,7 @@ const chatRoutes = require("./routes/chatRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const foodRoutes = require("./routes/foodRoutes");
 const savedMealsRoutes = require("./routes/savedMealsRoutes"); // Import the saved meals routes
+const mealPlanRoutes = require("./routes/mealPlanRoutes");
 
 const app = express();
 
@@ -50,6 +51,7 @@ app.use("/api/chat", chatRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/food", foodRoutes);
 app.use("/api/saved-meals", savedMealsRoutes);
+app.use("/api/meal-plans", mealPlanRoutes);
 app.get("/", (req, res) => {
   res.send("NutriMorph Backend Running...");
 });
