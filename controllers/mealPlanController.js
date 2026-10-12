@@ -1,7 +1,35 @@
 const MealPlan = require("../models/MealPlan");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { z } = require("zod");
 
-// Generate Custom Meal Plan using Gemini AI (3, 5, 7, 15, or 30 days)
+// 1. Zod Schema Definitions for AI Meal Plan Output Validation
+const MealItemSchema = z.object({
+  name: z.string(),
+  calories: z.number(),
+  protein: z.number(),
+  carbs: z.number(),
+  fats: z.number(),
+});
+
+const DayPlanSchema = z.object({
+  day: z.string(),
+  meals: z.object({
+    breakfast: MealItemSchema,
+    lunch: MealItemSchema,
+    dinner: MealItemSchema,
+    snack: MealItemSchema,
+  }),
+});
+
+const MealPlanResponseSchema = z.object({
+  goal: z.string(),
+  dietType: z.string(),
+  targetCalories: z.number(),
+  duration: z.number().optional(),
+  days: z.array(DayPlanSchema),
+});
+
+// Generate Custom Meal Plan using Gemini AI (3, 5, 7, 15, or 30 days) with Zod Validation
 const generateMealPlan = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
@@ -59,24 +87,47 @@ JSON Schema:
       .replace(/```json/gi, "")
       .replace(/```/g, "")
       .trim();
-    const planData = JSON.parse(rawText);
+
+    let parsedJSON;
+    try {
+      parsedJSON = JSON.parse(rawText);
+    } catch (parseErr) {
+      throw new Error("AI returned malformed JSON format");
+    }
+
+    // 2. Validate parsed output against Zod Schema
+    const validationResult = MealPlanResponseSchema.safeParse(parsedJSON);
+    if (!validationResult.success) {
+      console.error(
+        "Zod Schema Validation Failed:",
+        validationResult.error.format(),
+      );
+      return res.status(400).json({
+        success: false,
+        message:
+          "AI generated an invalid meal plan structure. Please try generating again.",
+      });
+    }
+
+    const validatedData = validationResult.data;
 
     // Deactivate previous active plans
     await MealPlan.updateMany({ userId }, { isActive: false });
 
-    // Save new plan to database
+    // Save validated plan to database
     const newMealPlan = await MealPlan.create({
       userId,
-      goal: planData.goal || goal || "weight_loss",
-      dietType: planData.dietType || dietType || "Desi / Pakistani Standard",
-      targetCalories: planData.targetCalories || targetCalories || 2000,
-      days: planData.days,
+      goal: validatedData.goal || goal || "weight_loss",
+      dietType:
+        validatedData.dietType || dietType || "Desi / Pakistani Standard",
+      targetCalories: validatedData.targetCalories || targetCalories || 2000,
+      days: validatedData.days,
       isActive: true,
     });
 
     return res.status(200).json({
       success: true,
-      message: `${duration}-Day meal plan generated successfully`,
+      message: `${duration}-Day meal plan generated and validated successfully`,
       data: newMealPlan,
     });
   } catch (error) {
