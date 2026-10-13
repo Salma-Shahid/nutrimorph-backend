@@ -1,5 +1,6 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const AppError = require("../utils/appError");
+const { callGeminiWithRetry } = require("../utils/aiHelper"); // 🟢 Retry Helper Import
 
 class AIService {
   async analyzeFoodImage(imageBase64) {
@@ -36,7 +37,11 @@ class AIService {
         },
       };
 
-      const result = await model.generateContent([prompt, imagePart]);
+      // 🟢 Wrapped with Exponential Backoff Retry Wrapper
+      const result = await callGeminiWithRetry(async () => {
+        return await model.generateContent([prompt, imagePart]);
+      });
+
       const rawText = result.response.text().trim();
 
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
