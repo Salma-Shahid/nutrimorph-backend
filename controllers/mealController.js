@@ -156,14 +156,18 @@ const getDailySummary = async (req, res) => {
   }
 };
 
-// 4. Get Weekly Summary & Gemini AI Insights
+// 4. Get Weekly Summary & Gemini AI Insights (Timezone Safe & Complete 7 Days)
 const getWeeklySummary = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
 
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-    sevenDaysAgo.setHours(0, 0, 0, 0);
+    // 🟢 Generate exact last 7 days date strings in user local timezone ("YYYY-MM-DD")
+    const last7DaysDates = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      last7DaysDates.push(d.toLocaleDateString("en-CA"));
+    }
 
     const weeklyData = await Meal.aggregate([
       {
@@ -172,17 +176,12 @@ const getWeeklySummary = async (req, res) => {
             { userId: new mongoose.Types.ObjectId(userId) },
             { user: new mongoose.Types.ObjectId(userId) },
           ],
-          createdAt: { $gte: sevenDaysAgo },
+          date: { $in: last7DaysDates }, // Match exact local date strings safely
         },
       },
       {
         $group: {
-          _id: {
-            $ifNull: [
-              "$date",
-              { $dateToString: { format: "\%Y-\%m-\%d", date: "$createdAt" } },
-            ],
-          },
+          _id: "$date",
           calories: { $sum: "$calories" },
           protein: { $sum: "$protein" },
           carbs: { $sum: "$carbs" },
@@ -191,6 +190,20 @@ const getWeeklySummary = async (req, res) => {
       },
       { $sort: { _id: 1 } },
     ]);
+
+    // 🟢 Ensure all 7 days are present in the response (fill missing days with 0)
+    const completeWeeklyData = last7DaysDates.map((dateStr) => {
+      const found = weeklyData.find((item) => item._id === dateStr);
+      return (
+        found || {
+          _id: dateStr,
+          calories: 0,
+          protein: 0,
+          carbs: 0,
+          fats: 0,
+        }
+      );
+    });
 
     // Generate AI Insights using Gemini
     let aiInsight =
@@ -202,7 +215,7 @@ const getWeeklySummary = async (req, res) => {
         const model = genAI.getGenerativeModel({
           model: "gemini-3.5-flash-lite",
         });
-        const prompt = `Analyze this weekly nutrition summary data and provide a concise, encouraging 2-sentence health tip or insight in English: ${JSON.stringify(weeklyData)}`;
+        const prompt = `Analyze this weekly nutrition summary data and provide a concise, encouraging 2-sentence health tip or insight in English: ${JSON.stringify(completeWeeklyData)}`;
 
         const result = await model.generateContent(prompt);
         const responseText = result.response.text();
@@ -217,7 +230,7 @@ const getWeeklySummary = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        weeklyHistory: weeklyData,
+        weeklyHistory: completeWeeklyData,
         aiInsight,
       },
     });
