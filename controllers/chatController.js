@@ -2,6 +2,7 @@ const ChatMessage = require("../models/ChatMessage");
 const User = require("../models/User");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const connectDB = require("../config/db"); // 🟢 Database Connection Import
+const { callGeminiWithRetry } = require("../utils/aiHelper"); // 🟢 Retry Helper Import
 
 // Initialize Google Generative AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -79,18 +80,24 @@ const handleChat = async (req, res) => {
       `Height: ${user.height ? `${user.height} cm` : "Not provided"}`,
     ].join("\n");
 
-    // Fetch recent chat history from MongoDB
-    const recentMessages = await ChatMessage.find({
+    // Fetch recent chat history from MongoDB (Optimized Token Cost via Truncation)
+    const rawHistory = await ChatMessage.find({
       $or: [{ user: userId }, { userId: userId }],
     })
       .sort({ createdAt: -1, _id: -1 })
       .limit(10);
 
-    // Format chat history for Gemini chat API structure
-    const formattedHistory = recentMessages.reverse().map((msg) => ({
-      role: msg.role === "bot" || msg.sender === "bot" ? "model" : "user",
-      parts: [{ text: msg.text }],
-    }));
+    // Format chat history & truncate old messages (>400 chars) to save tokens
+    const formattedHistory = rawHistory.reverse().map((msg) => {
+      const msgText = msg.text || "";
+      const truncatedText =
+        msgText.length > 400 ? msgText.substring(0, 400) + "..." : msgText;
+
+      return {
+        role: msg.role === "bot" || msg.sender === "bot" ? "model" : "user",
+        parts: [{ text: truncatedText }],
+      };
+    });
 
     // Configure Gemini AI Model
     const selectedModel = model || "gemini-1.5-flash";
@@ -110,8 +117,7 @@ STRICT INSTRUCTIONS:
 5. Avoid Speculation: Do not provide medical advice, diagnoses, or treatment plans. Refer users to certified professionals for health concerns.
 6. No Sensitive Data: Do not request or store sensitive personal information such as passwords, financial data, or health records.
 7. No External Links: Do not provide external links or references.
-8. Clarification: If the user's message is unclear, ask for clarification politely.
-9.If the image does not contain any edible food item, set isFood to false, foodName to 'Non-food item', and calories, protein, carbs, fats strictly to 0.`,
+8. Clarification: If the user's message is unclear, ask for clarification politely.`,
     });
 
     // Start Chat session with formatted conversation history
@@ -119,7 +125,11 @@ STRICT INSTRUCTIONS:
       history: formattedHistory,
     });
 
-    const result = await chatSession.sendMessage(message.trim());
+    // 🟢 Call Gemini with Exponential Backoff Retry Wrapper
+    const result = await callGeminiWithRetry(async () => {
+      return await chatSession.sendMessage(message.trim());
+    });
+
     const responseText = result.response.text();
 
     // Increment chat usage count for free tier users

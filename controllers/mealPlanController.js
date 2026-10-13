@@ -2,6 +2,7 @@ const MealPlan = require("../models/MealPlan");
 const User = require("../models/User");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { z } = require("zod");
+const { callGeminiWithRetry } = require("../utils/aiHelper"); // 🟢 Retry Helper Import
 
 // 1. Zod Schema Definitions for AI Meal Plan Output Validation
 const MealItemSchema = z.object({
@@ -98,7 +99,11 @@ JSON Schema:
   ]
 }`;
 
-    const result = await model.generateContent(prompt);
+    // 🟢 Call Gemini with Exponential Backoff Retry Wrapper
+    const result = await callGeminiWithRetry(async () => {
+      return await model.generateContent(prompt);
+    });
+
     let rawText = result.response.text();
 
     if (!rawText || rawText.trim() === "") {
