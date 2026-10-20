@@ -42,4 +42,17 @@ const fetchAndSavePlayStoreReviews = async (req, res) => {
   }
 };
 
-module.exports = { fetchAndSavePlayStoreReviews };
+// 2. Database se Reviews Fetch Karne Ka Function
+const getReviews = async (req, res) => {
+  try {
+    const reviews = await Review.find().sort({ updatedAt: -1 });
+    res.status(200).json({ success: true, data: reviews });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+module.exports = {
+  fetchAndSavePlayStoreReviews,
+  getReviews,
+};

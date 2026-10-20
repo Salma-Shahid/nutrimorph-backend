@@ -17,6 +17,7 @@ const foodRoutes = require("./routes/foodRoutes");
 const savedMealsRoutes = require("./routes/savedMealsRoutes"); // Import the saved meals routes
 const mealPlanRoutes = require("./routes/mealPlanRoutes");
 const initCronJobs = require("./utils/cronJobs");
+const reviewRoutes = require("./routes/reviewRoutes"); // <-- Yeh line add karein
 const app = express();
 
 // Global CORS Configuration
@@ -52,6 +53,7 @@ app.use("/api/payment", paymentRoutes);
 app.use("/api/food", foodRoutes);
 app.use("/api/saved-meals", savedMealsRoutes);
 app.use("/api/meal-plans", mealPlanRoutes);
+app.use("/api/reviews", reviewRoutes);
 app.get("/", (req, res) => {
   res.send("NutriMorph Backend Running...");
 });
