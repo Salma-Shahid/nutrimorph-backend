@@ -3,7 +3,7 @@ require("dotenv").config();
 
 // MongoDB Review Schema (Aapka banaya hua schema)
 const reviewSchema = new mongoose.Schema({
-  reviewId: String,
+  reviewId: { type: String, unique: true },
   author: String,
   comment: String,
   rating: Number,
