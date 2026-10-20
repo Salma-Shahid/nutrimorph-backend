@@ -18,5 +18,6 @@ router.put("/profile", protect, updateProfile);
 
 // 🔴 Account Deletion Endpoint (Google Play Compliance P0)
 router.delete("/me", protect, deleteAccount);
+router.get("/profile", protect, getMe);
 
 module.exports = router;

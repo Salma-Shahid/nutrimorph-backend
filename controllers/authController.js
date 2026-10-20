@@ -204,12 +204,28 @@ const login = async (req, res) => {
 };
 
 // @desc    Get logged in user profile
-// @route   GET /api/auth/me
+// @route   GET /api/auth/me & /api/auth/profile
 // @access  Private
 const getMe = async (req, res) => {
   try {
     await connectDB();
-    res.status(200).json(req.user);
+    const user = await User.findById(req.user._id).select("-password");
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    res.status(200).json({
+      success: true,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        subscriptionTier: user.subscriptionTier,
+        isPro: user.isPro,
+        subscriptionExpiresAt: user.subscriptionExpiresAt,
+        dailyCalorieGoal: user.dailyCalorieGoal,
+        avatar: user.avatar,
+      },
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
