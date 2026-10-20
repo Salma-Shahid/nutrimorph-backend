@@ -16,7 +16,7 @@ const paymentRoutes = require("./routes/paymentRoutes");
 const foodRoutes = require("./routes/foodRoutes");
 const savedMealsRoutes = require("./routes/savedMealsRoutes"); // Import the saved meals routes
 const mealPlanRoutes = require("./routes/mealPlanRoutes");
-
+const initCronJobs = require("./utils/cronJobs");
 const app = express();
 
 // Global CORS Configuration
@@ -64,6 +64,8 @@ if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
+    // Start Cron Job
+    initCronJobs();
   });
 }
 
