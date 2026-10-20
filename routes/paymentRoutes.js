@@ -55,7 +55,7 @@ router.post("/create-checkout-session", protect, async (req, res) => {
   }
 });
 
-// 2. Success Redirect (MongoDB Auto Update for Pro)
+// 2. Success Redirect (MongoDB Auto Update & Redirect to Web App)
 router.get("/success", async (req, res) => {
   try {
     const { userId, billing } = req.query;
@@ -71,13 +71,8 @@ router.get("/success", async (req, res) => {
       });
     }
 
-    res.send(`
-      <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; height: 100vh;">
-        <h1 style="color: #22c55e;">🎉 Payment Successful!</h1>
-        <p style="font-size: 18px; color: #cbd5e1;">Your Pro Plan is now active.</p>
-        <p style="color: #94a3b8;">You can close this window and restart the app.</p>
-      </div>
-    `);
+    // 🔄 Redirect back to web application plans page with success query flag
+    res.redirect("https://nutrimorph-web.vercel.app/plans?payment=success");
   } catch (error) {
     res.status(500).send("Database Update Failed");
   }
@@ -108,12 +103,11 @@ router.post("/verify-payment", protect, async (req, res) => {
   }
 });
 
-// 5. Update / Switch Plan Route (Only allowed for Free plan direct switch)
+// 5. Update / Switch Plan Route
 router.post("/update-plan", protect, async (req, res) => {
   try {
     const { plan, aiModel } = req.body;
 
-    // 🔴 Security Check: Pro plan direct update allow nahi hai, uske liye Stripe checkout zaroori hai
     if (plan && plan.toLowerCase() === "pro") {
       return res.status(400).json({
         success: false,
@@ -129,7 +123,6 @@ router.post("/update-plan", protect, async (req, res) => {
         .json({ success: false, message: "User not found." });
     }
 
-    // Yeh endpoint ab sirf Free plan mein switch karne ke liye kaam karega
     user.subscriptionTier = "free";
     user.isPro = false;
     user.subscriptionExpiresAt = null;
@@ -147,7 +140,7 @@ router.post("/update-plan", protect, async (req, res) => {
   }
 });
 
-// 6. Downgrade / Switch to Free Plan (Legacy route support)
+// 6. Downgrade / Switch to Free Plan
 router.post("/switch-to-free", protect, async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
