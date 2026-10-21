@@ -35,7 +35,9 @@ router.post("/", protect, async (req, res) => {
     );
 
     // 2. 💧 Water Milestones Badge Checking Logic
-    const user = await User.findById(userId);
+    let user = await User.findById(userId);
+    let newlyUnlocked = [];
+
     if (user) {
       const totalMl = (glasses || 0) * 250; // 1 glass = 250ml
       const waterMilestones = [
@@ -48,8 +50,6 @@ router.post("/", protect, async (req, res) => {
       if (!user.unlockedBadges) {
         user.unlockedBadges = [];
       }
-
-      let newlyUnlocked = [];
 
       waterMilestones.forEach((milestone) => {
         const alreadyUnlocked = user.unlockedBadges.some(
@@ -66,6 +66,8 @@ router.post("/", protect, async (req, res) => {
       });
 
       if (newlyUnlocked.length > 0) {
+        // Mongoose Schema Array Change Track ensure karne ke liye
+        user.markModified("unlockedBadges");
         await user.save();
       }
     }
@@ -74,6 +76,7 @@ router.post("/", protect, async (req, res) => {
       success: true,
       data: waterRecord,
       unlockedBadges: user ? user.unlockedBadges : [],
+      newlyUnlockedBadges: newlyUnlocked,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
