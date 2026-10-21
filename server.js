@@ -14,21 +14,40 @@ const { apiLimiter } = require("./middlewares/rateLimiter");
 const chatRoutes = require("./routes/chatRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const foodRoutes = require("./routes/foodRoutes");
-const savedMealsRoutes = require("./routes/savedMealsRoutes"); // Import the saved meals routes
+const savedMealsRoutes = require("./routes/savedMealsRoutes");
 const mealPlanRoutes = require("./routes/mealPlanRoutes");
 const initCronJobs = require("./utils/cronJobs");
-const reviewRoutes = require("./routes/reviewRoutes"); // <-- Yeh line add karein
+const reviewRoutes = require("./routes/reviewRoutes");
 const app = express();
 
-// Global CORS Configuration
+// Global CORS Configuration - Updated for Expo Web & Mobile Clients
+const allowedOrigins = [
+  "https://nutrimorph-web.vercel.app",
+  "http://localhost:3000",
+  "http://localhost:8081",
+  "http://192.168.18.113:8081",
+];
+
 const corsOptions = {
-  origin: ["https://nutrimorph-web.vercel.app", "http://localhost:3000"],
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps, Postman, curl)
+    if (!origin) return callback(null, true);
+    if (
+      allowedOrigins.indexOf(origin) !== -1 ||
+      process.env.NODE_ENV !== "production"
+    ) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
 };
 
 app.use(cors(corsOptions));
+app.options(/(.*)/, cors(corsOptions));
 
 // Database connection initialization
 connectDB().catch((err) => {
@@ -55,6 +74,7 @@ app.use("/api/saved-meals", savedMealsRoutes);
 app.use("/api/meal-plans", mealPlanRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/recipes", require("./routes/recipeRoutes.js"));
+
 app.get("/", (req, res) => {
   res.send("NutriMorph Backend Running...");
 });
