@@ -186,15 +186,16 @@ const login = async (req, res) => {
       _id: user._id,
       name: user.name,
       email: user.email,
-      isOnboarded: user.isOnboarded,
+      isOnboarded: user.isOnboarded || user.isOnboardingCompleted || false,
       dailyCalories: user.dailyCalories || 2000,
       dailyCalorieGoal: user.dailyCalorieGoal || user.dailyCalories || 2000,
       subscriptionTier: user.subscriptionTier || "free",
       isPro: user.isPro || false,
       avatar: user.avatar || user.profileImage || null,
-      macros: user.macros,
+      macros: user.macros || user.macrosTarget,
       weight: user.weight,
       height: user.height,
+      preferredMealsCount: user.preferredMealsCount || 4,
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -222,8 +223,10 @@ const getMe = async (req, res) => {
         subscriptionTier: user.subscriptionTier,
         isPro: user.isPro,
         subscriptionExpiresAt: user.subscriptionExpiresAt,
-        dailyCalorieGoal: user.dailyCalorieGoal,
+        dailyCalorieGoal: user.dailyCalorieGoal || user.dailyCalorieTarget,
         avatar: user.avatar,
+        isOnboarded: user.isOnboarded || user.isOnboardingCompleted,
+        preferredMealsCount: user.preferredMealsCount || 4,
       },
     });
   } catch (error) {
@@ -324,6 +327,131 @@ const updateProfile = async (req, res) => {
   }
 };
 
+// @desc    Complete Onboarding Wizard Flow
+// @route   POST /api/auth/onboarding
+// @access  Private
+const completeOnboarding = async (req, res) => {
+  try {
+    await connectDB();
+
+    const userId = req.user?._id || req.user?.id;
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    const {
+      language,
+      gender,
+      dob,
+      height, // { value: 170, unit: "cm" }
+      currentWeight, // { value: 75, unit: "kg" }
+      targetWeight, // { value: 65, unit: "kg" }
+      fitnessGoal,
+      activityLevel,
+      preferredMealsCount,
+    } = req.body;
+
+    // 1. Age Calculation
+    let age = user.age || 25;
+    if (dob) {
+      const birthDate = new Date(dob);
+      const today = new Date();
+      age = today.getFullYear() - birthDate.getFullYear();
+      const monthDiff = today.getMonth() - birthDate.getMonth();
+      if (
+        monthDiff < 0 ||
+        (monthDiff === 0 && today.getDate() < birthDate.getDate())
+      ) {
+        age--;
+      }
+    }
+
+    // 2. Unit Conversions
+    const heightVal = height?.value || user.height || 170;
+    const heightUnit = height?.unit || "cm";
+    const heightInCm = heightUnit === "ft" ? heightVal * 30.48 : heightVal;
+    const heightInMeters = heightInCm / 100;
+
+    const weightVal = currentWeight?.value || user.weight || 70;
+    const weightUnit = currentWeight?.unit || "kg";
+    const weightInKg = weightUnit === "lbs" ? weightVal * 0.453592 : weightVal;
+
+    // 3. BMI Calculation
+    const bmi = parseFloat(
+      (weightInKg / (heightInMeters * heightInMeters)).toFixed(1),
+    );
+    let bmiCategory = "Normal";
+    if (bmi < 18.5) bmiCategory = "Underweight";
+    else if (bmi >= 25 && bmi < 29.9) bmiCategory = "Overweight";
+    else if (bmi >= 30) bmiCategory = "Obese";
+
+    // 4. BMR Calculation (Mifflin-St Jeor)
+    let bmr = 10 * weightInKg + 6.25 * heightInCm - 5 * age;
+    bmr += gender === "Female" || gender === "female" ? -161 : 5;
+
+    // 5. Activity Multiplier (TDEE)
+    const activityMultipliers = {
+      "Not very active": 1.2,
+      "Lightly active": 1.375,
+      Active: 1.55,
+      "Very active": 1.725,
+    };
+
+    let tdee = bmr * (activityMultipliers[activityLevel] || 1.375);
+
+    // Goal Adjustments
+    if (fitnessGoal === "Lose Weight" || fitnessGoal === "weight_loss")
+      tdee -= 500;
+    else if (fitnessGoal === "Gain Weight" || fitnessGoal === "muscle_gain")
+      tdee += 400;
+
+    const dailyCalorieTarget = Math.max(1200, Math.round(tdee));
+
+    // 6. Macros Allocation
+    const macrosTarget = {
+      protein: Math.round((dailyCalorieTarget * 0.25) / 4),
+      carbs: Math.round((dailyCalorieTarget * 0.45) / 4),
+      fats: Math.round((dailyCalorieTarget * 0.3) / 9),
+    };
+
+    // Update User Document
+    user.language = language || user.language || "English";
+    user.gender = gender || user.gender;
+    if (dob) user.dob = dob;
+    user.age = age;
+    user.height = heightVal;
+    user.weight = weightVal;
+    user.bmi = bmi;
+    user.bmiCategory = bmiCategory;
+    user.goal = fitnessGoal || user.goal;
+    user.activityLevel = activityLevel || user.activityLevel;
+    user.preferredMealsCount =
+      preferredMealsCount || user.preferredMealsCount || 4;
+    user.dailyCalories = dailyCalorieTarget;
+    user.dailyCalorieGoal = dailyCalorieTarget;
+    user.macros = macrosTarget;
+    user.isOnboarded = true;
+    user.isOnboardingCompleted = true;
+
+    const updatedUser = await user.save();
+    const userResponse = updatedUser.toObject();
+    delete userResponse.password;
+
+    return res.status(200).json({
+      success: true,
+      message: "Onboarding completed successfully!",
+      user: userResponse,
+    });
+  } catch (error) {
+    console.error("Complete Onboarding Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // @desc    Delete User Account & Cascade Delete Associated Data
 // @route   DELETE /api/auth/me
 // @access  Private
@@ -375,5 +503,6 @@ module.exports = {
   login,
   getMe,
   updateProfile,
+  completeOnboarding, // 🟢 Added Onboarding Handler
   deleteAccount,
 };

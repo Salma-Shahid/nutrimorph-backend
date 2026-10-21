@@ -54,6 +54,7 @@ app.use("/api/food", foodRoutes);
 app.use("/api/saved-meals", savedMealsRoutes);
 app.use("/api/meal-plans", mealPlanRoutes);
 app.use("/api/reviews", reviewRoutes);
+app.use("/api/recipes", require("./routes/recipeRoutes.js"));
 app.get("/", (req, res) => {
   res.send("NutriMorph Backend Running...");
 });

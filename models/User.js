@@ -24,15 +24,24 @@ const userSchema = new mongoose.Schema(
     dailyChatCount: { type: Number, default: 0 },
     lastChatDate: { type: Date, default: Date.now },
 
-    // 🏋️ Profile & Health Metrics
+    // 🏋️ Profile & Health Metrics (Enhanced for Onboarding Wizard)
     isOnboarded: { type: Boolean, default: false },
+    isOnboardingCompleted: { type: Boolean, default: false }, // 🟢 Added for wizard completion flag
+    language: { type: String, default: "English" }, // 🟢 Added language preference
     avatar: { type: String, default: null },
     profileImage: { type: String, default: null },
     age: { type: Number },
     gender: { type: String },
+    dob: { type: Date }, // 🟢 Added date of birth
     weight: { type: Number },
     height: { type: Number },
+    targetWeight: { type: Number }, // 🟢 Added target weight goal
+    bmi: { type: Number }, // 🟢 Added calculated BMI
+    bmiCategory: { type: String }, // 🟢 Added BMI category (Normal, Overweight, etc.)
     goal: { type: String },
+    fitnessGoal: { type: String }, // 🟢 Added fitness goal mapping
+    activityLevel: { type: String }, // 🟢 Added activity level (TDEE multiplier)
+    preferredMealsCount: { type: Number, default: 4 }, // 🟢 Added preferred meals per day
     dailyCalories: { type: Number, default: 2000 },
     dailyCalorieGoal: { type: Number, default: 2000 },
     macros: {
