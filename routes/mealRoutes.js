@@ -5,7 +5,7 @@ const validateRequest = require("../middlewares/validateRequest");
 const { analyzeMealSchema } = require("../validators/mealValidator");
 const { aiLimiter } = require("../middlewares/rateLimiter");
 const { protect } = require("../middlewares/authMiddleware");
-const { checkPro } = require("../middlewares/checkPro"); // 👈 Pro Middleware Import
+const { checkPro } = require("../middlewares/checkPro");
 
 // 1. Daily & Weekly Summary GET Routes
 router.get("/summary", protect, mealController.getDailySummary);
@@ -14,7 +14,7 @@ router.get("/today", protect, mealController.getDailySummary);
 router.get("/", protect, mealController.getDailySummary);
 router.get("/weekly-summary", protect, mealController.getWeeklySummary);
 
-// 2. AI Scan Routes (Protected + Pro Check + Rate Limiter)
+// 2. AI Scan Routes
 router.post(
   "/scan",
   protect,
@@ -32,10 +32,10 @@ router.post(
   mealController.analyzeMealImage,
 );
 
-// 3. AI Text Parsing Route (Protected + Pro Check)
+// 3. AI Text Parsing Route
 router.post("/parse-text", protect, checkPro, mealController.analyzeMealText);
 
-// 4. Log Meal Routes (Free + Pro Both)
+// 4. Log Meal Routes
 router.post("/log", protect, mealController.logMeal);
 router.post("/", protect, mealController.logMeal);
 

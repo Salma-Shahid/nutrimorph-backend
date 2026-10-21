@@ -26,22 +26,23 @@ const userSchema = new mongoose.Schema(
 
     // 🏋️ Profile & Health Metrics (Enhanced for Onboarding Wizard)
     isOnboarded: { type: Boolean, default: false },
-    isOnboardingCompleted: { type: Boolean, default: false }, // 🟢 Added for wizard completion flag
-    language: { type: String, default: "English" }, // 🟢 Added language preference
+    isOnboardingCompleted: { type: Boolean, default: false },
+    language: { type: String, default: "English" },
     avatar: { type: String, default: null },
     profileImage: { type: String, default: null },
     age: { type: Number },
     gender: { type: String },
-    dob: { type: Date }, // 🟢 Added date of birth
+    dob: { type: Date },
     weight: { type: Number },
     height: { type: Number },
-    targetWeight: { type: Number }, // 🟢 Added target weight goal
-    bmi: { type: Number }, // 🟢 Added calculated BMI
-    bmiCategory: { type: String }, // 🟢 Added BMI category (Normal, Overweight, etc.)
+    targetWeight: { type: Number },
+    bmi: { type: Number },
+    bmiCategory: { type: String },
     goal: { type: String },
-    fitnessGoal: { type: String }, // 🟢 Added fitness goal mapping
-    activityLevel: { type: String }, // 🟢 Added activity level (TDEE multiplier)
-    preferredMealsCount: { type: Number, default: 4 }, // 🟢 Added preferred meals per day
+    fitnessGoal: { type: String },
+    activityLevel: { type: String },
+    medicalCondition: { type: String, default: "None" }, // 🟢 Added for medical history
+    preferredMealsCount: { type: Number, default: 4 },
     dailyCalories: { type: Number, default: 2000 },
     dailyCalorieGoal: { type: Number, default: 2000 },
     macros: {
@@ -49,6 +50,16 @@ const userSchema = new mongoose.Schema(
       carbs: { type: Number },
       fats: { type: Number },
     },
+
+    // 🔥 Gamification & Engagement (Streak & Badges)
+    streakCount: { type: Number, default: 0 }, // 🟢 Daily consecutive logging streak
+    lastLoggedDate: { type: String, default: null }, // 🟢 Format: "YYYY-MM-DD"
+    unlockedBadges: [
+      {
+        badgeId: { type: String, required: true },
+        unlockedAt: { type: Date, default: Date.now },
+      },
+    ], // 🟢 Unlocked achievement badges list
   },
   { timestamps: true },
 );

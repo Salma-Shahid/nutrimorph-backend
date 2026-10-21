@@ -1,8 +1,32 @@
 const Meal = require("../models/Meal");
+const User = require("../models/User");
 const aiService = require("../services/aiService");
 const AppError = require("../utils/appError");
 const mongoose = require("mongoose");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+// Helper function to calculate streak
+const calculateUserStreak = (lastLoggedDate, currentStreak) => {
+  const today = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD
+  if (!lastLoggedDate) {
+    return { streak: 1, lastLoggedDate: today };
+  }
+
+  if (lastLoggedDate === today) {
+    return { streak: currentStreak || 1, lastLoggedDate: today };
+  }
+
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toLocaleDateString("en-CA");
+
+  if (lastLoggedDate === yesterdayStr) {
+    return { streak: (currentStreak || 0) + 1, lastLoggedDate: today };
+  }
+
+  // Broken streak
+  return { streak: 1, lastLoggedDate: today };
+};
 
 // 1. AI Text Analysis
 const analyzeMealText = async (req, res) => {
@@ -108,7 +132,7 @@ const analyzeMealImage = async (req, res, next) => {
   }
 };
 
-// 3. Get Today's Meals & Summary (Timezone Safe)
+// 3. Get Today's Meals & Summary (Timezone Safe & User Isolated)
 const getDailySummary = async (req, res) => {
   try {
     const { date } = req.query;
@@ -156,12 +180,11 @@ const getDailySummary = async (req, res) => {
   }
 };
 
-// 4. Get Weekly Summary & Gemini AI Insights (Timezone Safe & Complete 7 Days)
+// 4. Get Weekly Summary & Gemini AI Insights (User Isolated & Complete 7 Days)
 const getWeeklySummary = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
 
-    // 🟢 Generate exact last 7 days date strings in user local timezone ("YYYY-MM-DD")
     const last7DaysDates = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
@@ -176,7 +199,7 @@ const getWeeklySummary = async (req, res) => {
             { userId: new mongoose.Types.ObjectId(userId) },
             { user: new mongoose.Types.ObjectId(userId) },
           ],
-          date: { $in: last7DaysDates }, // Match exact local date strings safely
+          date: { $in: last7DaysDates },
         },
       },
       {
@@ -191,7 +214,6 @@ const getWeeklySummary = async (req, res) => {
       { $sort: { _id: 1 } },
     ]);
 
-    // 🟢 Ensure all 7 days are present in the response (fill missing days with 0)
     const completeWeeklyData = last7DaysDates.map((dateStr) => {
       const found = weeklyData.find((item) => item._id === dateStr);
       return (
@@ -205,7 +227,6 @@ const getWeeklySummary = async (req, res) => {
       );
     });
 
-    // Generate AI Insights using Gemini
     let aiInsight =
       "Keep tracking your daily meals consistently to achieve your health goals!";
     try {
@@ -242,7 +263,7 @@ const getWeeklySummary = async (req, res) => {
   }
 };
 
-// 5. Log Meal (Timezone Safe)
+// 5. Log Meal (With Streak Calculation & Badge Trigger)
 const logMeal = async (req, res, next) => {
   try {
     const { name, calories, protein, carbs, fats, date } = req.body;
@@ -256,6 +277,7 @@ const logMeal = async (req, res, next) => {
 
     const userLocalDate = date || new Date().toLocaleDateString("en-CA");
 
+    // Create Meal entry
     const meal = await Meal.create({
       userId: userId,
       user: userId,
@@ -267,26 +289,68 @@ const logMeal = async (req, res, next) => {
       date: userLocalDate,
     });
 
+    // 🟢 Gamification Logic: Update Streak & Check Exercise Badges
+    let updatedStreak = 1;
+    let newUnlockedBadge = null;
+
+    const dbUser = await User.findById(userId);
+    if (dbUser) {
+      const streakResult = calculateUserStreak(
+        dbUser.lastLoggedDate,
+        dbUser.streakCount,
+      );
+
+      dbUser.streakCount = streakResult.streak;
+      dbUser.lastLoggedDate = streakResult.lastLoggedDate;
+      updatedStreak = streakResult.streak;
+
+      // Badges Check Logic based on Streak Days
+      const existingBadgeIds = (dbUser.unlockedBadges || []).map(
+        (b) => b.badgeId,
+      );
+
+      const checkBadge = (threshold, badgeId) => {
+        if (updatedStreak >= threshold && !existingBadgeIds.includes(badgeId)) {
+          dbUser.unlockedBadges.push({ badgeId });
+          newUnlockedBadge = badgeId;
+        }
+      };
+
+      checkBadge(3, "ex_3days");
+      checkBadge(7, "ex_7days");
+      checkBadge(15, "ex_15days");
+      checkBadge(30, "ex_30days");
+
+      await dbUser.save();
+    }
+
     res.status(201).json({
       success: true,
       status: "success",
       data: meal,
+      streakCount: updatedStreak,
+      unlockedBadge: newUnlockedBadge,
     });
   } catch (error) {
     next(error);
   }
 };
 
-// 6. Delete Meal
+// 6. Delete Meal (Secured with User Check)
 const deleteMeal = async (req, res) => {
   try {
     const { id } = req.params;
-    const meal = await Meal.findById(id);
+    const userId = req.user._id || req.user.id;
+
+    const meal = await Meal.findOne({
+      _id: id,
+      $or: [{ userId: userId }, { user: userId }],
+    });
 
     if (!meal) {
       return res.status(404).json({
         success: false,
-        message: "Meal not found in database",
+        message: "Meal not found or unauthorized to delete",
       });
     }
 
@@ -308,16 +372,21 @@ const deleteMeal = async (req, res) => {
 const updateMeal = async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = req.user._id || req.user.id;
 
-    const updatedMeal = await Meal.findByIdAndUpdate(id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    const updatedMeal = await Meal.findOneAndUpdate(
+      { _id: id, $or: [{ userId: userId }, { user: userId }] },
+      req.body,
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
 
     if (!updatedMeal) {
       return res
         .status(404)
-        .json({ success: false, message: "Meal not found" });
+        .json({ success: false, message: "Meal not found or unauthorized" });
     }
 
     return res.status(200).json({
