@@ -73,6 +73,7 @@ router.post("/", protect, async (req, res) => {
     res.status(200).json({
       success: true,
       data: waterRecord,
+      unlockedBadges: user ? user.unlockedBadges : [],
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
