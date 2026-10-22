@@ -12,7 +12,7 @@ const sampleRecipes = [
     fats: 12,
     isGlobal: true,
     image:
-      "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=600",
+      "https://media.istockphoto.com/id/908070288/photo/healthy-chicken-and-quinoa-bowl.webp?a=1&b=1&s=612x612&w=0&k=20&c=wmICc63b-y0AGhTIr_UbJOPH2yWNy1nKSug45BGSS9c=",
     ingredients: [
       "200g Chicken Breast",
       "1 cup Quinoa",
@@ -34,7 +34,7 @@ const sampleRecipes = [
     fats: 6,
     isGlobal: true,
     image:
-      "https://images.unsplash.com/photo-1553530666-ba11a7da3888?q=80&w=600",
+      "https://images.unsplash.com/photo-1542444592-0d5997f202eb?w=600&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=NHwxMjA3fDA%3D",
     ingredients: [
       "1 Banana",
       "1 Scoop Whey Protein",
@@ -55,7 +55,7 @@ const sampleRecipes = [
     fats: 4,
     isGlobal: true,
     image:
-      "https://images.unsplash.com/photo-1488477181946-6428a0291777?q=80&w=600",
+      "https://media.istockphoto.com/id/2208382438/photo/homemade-healthy-breakfast-yogurt-parfait.webp?a=1&b=1&s=612x612&w=0&k=20&c=RgtJ-YBQuHlFqFEEpQf19zGEUPfo_fojOBfqgaVwne8=",
     ingredients: [
       "200g Low-fat Greek Yogurt",
       "1/2 cup Mixed Berries",
@@ -75,7 +75,7 @@ const sampleRecipes = [
     fats: 10,
     isGlobal: true,
     image:
-      "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?q=80&w=600",
+      "https://images.unsplash.com/photo-1691749123977-0701680083b8?w=600&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=NHwxMjA3fDA%3D",
     ingredients: [
       "1 Orange",
       "Fresh Ginger Dressing",
@@ -96,7 +96,7 @@ const sampleRecipes = [
     fats: 16,
     isGlobal: true,
     image:
-      "https://images.unsplash.com/photo-1525351484163-7529414344d8?q=80&w=600",
+      "https://media.istockphoto.com/id/1367331230/photo/traditional-english-crumpets-or-muffins.webp?a=1&b=1&s=612x612&w=0&k=20&c=vRv7Oi8-JZoZ0FkMN6mAJNC8-IfdpK7LQfjiffFvOC0=",
     ingredients: ["3 Whole Eggs", "2 Slices Whole Wheat Bread", "1 tsp Butter"],
     directions: ["Scramble eggs in butter.", "Toast bread and serve warm."],
   },
