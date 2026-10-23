@@ -460,26 +460,31 @@
     "category": "High-Protein",
     "cuisine": "North African",
     "calories": 360,
-    "protein": 24,
-    "carbs": 32,
-    "fats": 13,
+    "protein": 21,
+    "carbs": 34,
+    "fats": 16,
     "isGlobal": true,
     "image": "https://images.unsplash.com/photo-1590412200988-a46697078ad2?q=80&w=600",
     "imageSource": "Unsplash free-image search page; choose a matching photo and verify its license before production use",
     "ingredients": [
-      "2 eggs or 150–200 g eggs",
-      "1 cup spinach or seasonal vegetables",
-      "2 slices whole-wheat toast or 3/4 cup cooked whole grain",
-      "1 tsp olive oil",
+      "2 large eggs",
+      "2 medium ripe tomatoes, diced, or 1 cup canned crushed tomatoes",
+      "1/2 red bell pepper, diced",
       "1/4 small onion, finely chopped",
-      "1/2 tsp dried herbs",
-      "Salt and black pepper to taste"
+      "1 garlic clove, minced",
+      "1 tsp olive oil",
+      "1/2 tsp ground cumin",
+      "1/2 tsp smoked paprika",
+      "Pinch of chilli flakes, optional",
+      "2 slices whole-grain bread",
+      "Salt and black pepper to taste",
+      "Chopped parsley or cilantro for garnish"
     ],
     "directions": [
-      "Prepare the eggs according to the recipe style: whisk eggs, crumble paneer or cheese, or portion the dairy into a bowl.",
-      "Warm the oil in a non-stick pan over medium heat. Cook the onion for 2–3 minutes, then add the vegetables and herbs.",
-      "Add the eggs or paneer if cooking them; stir or turn gently until cooked through and lightly golden. For yogurt-based versions, serve the warm vegetables alongside the yogurt instead.",
-      "Serve with whole-wheat toast or the cooked grain. Adjust seasoning and garnish with herbs."
+      "Heat olive oil in a skillet over medium heat. Add onion and bell pepper and cook for 5 minutes until softened.",
+      "Stir in garlic, cumin, smoked paprika, chilli flakes if using, and a pinch of salt. Cook for 30 seconds, then add the tomatoes and simmer for 8–10 minutes until thickened.",
+      "Make two small wells in the sauce and crack an egg into each. Cover and cook for 5–7 minutes, until the whites are set and the yolks reach your preferred doneness.",
+      "Season with black pepper, garnish with parsley or cilantro, and serve hot with toasted whole-grain bread."
     ]
   },
   {
