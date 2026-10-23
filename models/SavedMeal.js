@@ -23,6 +23,7 @@ const savedMealSchema = new mongoose.Schema(
         "High-Protein",
         "Immune Support",
         "Pantry Staples",
+        "Weight Loss",
         "Plant-Based",
         "Vegetarian",
         "Vegan",
