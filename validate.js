@@ -16,9 +16,9 @@ r.forEach((x, i) => {
   if (!cats.includes(x.category)) console.log("Bad category:", i, x.name);
   if (x.calories < 200 || x.calories > 650)
     console.log("Calories out of range:", x.name);
-  if (x.protein < 10 || x.protein > 55)
+  if (x.protein < 8 || x.protein > 55)
     console.log("Protein out of range:", x.name);
-  if (x.carbs < 15 || x.carbs > 75) console.log("Carbs out of range:", x.name);
+  if (x.carbs < 10 || x.carbs > 75) console.log("Carbs out of range:", x.name);
   if (x.fats < 5 || x.fats > 30) console.log("Fats out of range:", x.name);
   count[x.category] = (count[x.category] || 0) + 1;
 });

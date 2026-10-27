@@ -3,6 +3,15 @@ dns.setDefaultResultOrder("ipv4first");
 const dotenv = require("dotenv");
 dotenv.config();
 
+const cloudinary = require("cloudinary").v2;
+
+// Cloudinary Configuration
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
 const express = require("express");
 const cors = require("cors");
 const connectDB = require("./config/db");
@@ -22,7 +31,8 @@ const app = express();
 
 // Global CORS Configuration - Updated for Expo Web & Mobile Clients
 const allowedOrigins = [
-  "https://nutrimorph-web.vercel.app",
+  "https://nutrimorph.app",
+  "https://www.nutrimorph.app",
   "http://localhost:3000",
   "http://localhost:8081",
   "http://192.168.18.113:8081",
