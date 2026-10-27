@@ -25,7 +25,7 @@ router.post("/create-checkout-session", protect, async (req, res) => {
     const serverUrl =
       process.env.SERVER_URL ||
       `${req.protocol}://${req.get("host")}` ||
-      "https://nutrimorph-backend.vercel.app";
+      "https://api.nutrimorph.app";
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
