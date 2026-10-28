@@ -35,6 +35,7 @@ router.post(
 
 // 3. AI Text Parsing Route
 router.post("/parse-text", protect, checkPro, mealController.analyzeMealText);
+router.post("/recovery-guidance", protect, mealController.getRecoveryGuidance);
 
 // 4. Log Meal Routes
 router.post("/log", protect, mealController.logMeal);
