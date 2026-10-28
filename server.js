@@ -27,6 +27,7 @@ const savedMealsRoutes = require("./routes/savedMealsRoutes");
 const mealPlanRoutes = require("./routes/mealPlanRoutes");
 const initCronJobs = require("./utils/cronJobs");
 const reviewRoutes = require("./routes/reviewRoutes");
+const exerciseRoutes = require("./routes/exerciseRoutes");
 const app = express();
 
 // Global CORS Configuration - Updated for Expo Web & Mobile Clients
