@@ -13,6 +13,7 @@ router.get("/daily-summary", protect, mealController.getDailySummary);
 router.get("/today", protect, mealController.getDailySummary);
 router.get("/", protect, mealController.getDailySummary);
 router.get("/weekly-summary", protect, mealController.getWeeklySummary);
+router.get("/recovery-guidance", protect, mealController.getRecoveryGuidance);
 
 // 2. AI Scan Routes
 router.post(

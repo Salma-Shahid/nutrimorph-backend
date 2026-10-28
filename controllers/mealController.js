@@ -400,10 +400,29 @@ const updateMeal = async (req, res) => {
   }
 };
 
+// 8. Get AI Recovery Guidance
+const getRecoveryGuidance = async (req, res, next) => {
+  try {
+    const { deviationAmount, latestMealType } = req.query;
+    const guidance = await aiService.generateRecoveryGuidance(
+      deviationAmount || 0,
+      latestMealType || "Snack",
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: { guidance },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   analyzeMealText,
   analyzeMealImage,
   scanMealImage: analyzeMealImage,
+  getRecoveryGuidance,
   getDailySummary,
   getWeeklySummary,
   logMeal,
