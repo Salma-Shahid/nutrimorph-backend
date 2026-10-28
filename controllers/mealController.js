@@ -263,10 +263,10 @@ const getWeeklySummary = async (req, res) => {
   }
 };
 
-// 5. Log Meal (With Streak Calculation & Badge Trigger)
+// 5. Log Meal (With Streak Calculation, Badge Trigger & MealType Support)
 const logMeal = async (req, res, next) => {
   try {
-    const { name, calories, protein, carbs, fats, date } = req.body;
+    const { name, calories, protein, carbs, fats, date, mealType } = req.body;
     const userId = req.user?._id || req.user?.id;
 
     if (!userId) {
@@ -277,7 +277,7 @@ const logMeal = async (req, res, next) => {
 
     const userLocalDate = date || new Date().toLocaleDateString("en-CA");
 
-    // Create Meal entry
+    // Create Meal entry with mealType
     const meal = await Meal.create({
       userId: userId,
       user: userId,
@@ -286,6 +286,7 @@ const logMeal = async (req, res, next) => {
       protein: Number(protein) || 0,
       carbs: Number(carbs) || 0,
       fats: Number(fats) || 0,
+      mealType: mealType || "Lunch", // 🟢 Added mealType tagging support
       date: userLocalDate,
     });
 

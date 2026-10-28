@@ -22,13 +22,19 @@ const MealSchema = new mongoose.Schema(
     protein: { type: Number, default: 0 },
     carbs: { type: Number, default: 0 },
     fats: { type: Number, default: 0 },
-    mealType: { type: String, default: "snack" },
 
-    // 🟢 IS FIELD KO ADD KAREIN:
+    // 🟢 Standardized Meal Type Enum:
+    mealType: {
+      type: String,
+      enum: ["Breakfast", "Lunch", "Dinner", "Snack", "Late-night"],
+      default: "Lunch",
+      required: true,
+    },
+
     date: {
       type: String, // Format: "YYYY-MM-DD"
       required: true,
-      index: true, // Fast queries ke liye
+      index: true,
     },
   },
   { timestamps: true },
