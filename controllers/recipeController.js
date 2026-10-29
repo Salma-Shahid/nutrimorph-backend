@@ -23,10 +23,10 @@ const calculateUserStreak = (lastLoggedDate, currentStreak) => {
 const getCategorizedRecipes = async (req, res) => {
   try {
     const { category } = req.query;
-    const userId = req.user?._id || req.user?.id;
 
+    // Sirf global / official recipes fetch hongi, personal saved meals nahi
     let query = {
-      $or: [{ isGlobal: true }, { userId: userId }],
+      isGlobal: true,
     };
 
     if (category && category !== "All") {
