@@ -43,8 +43,8 @@ const logExerciseOrSteps = async (req, res, next) => {
       record = await Exercise.create({
         user: userId,
         date: logDate,
-        steps: steps || 0,
-        caloriesBurned: caloriesBurned || 0,
+        steps: steps ? Number(steps) : 0,
+        caloriesBurned: caloriesBurned ? Number(caloriesBurned) : 0,
         exerciseName: exerciseName || "",
       });
     }
@@ -52,7 +52,7 @@ const logExerciseOrSteps = async (req, res, next) => {
     // 2. Fetch User Profile Strictly by Authenticated User ID
     const user = await User.findById(userId);
     if (user) {
-      // Cumulative steps update
+      // Cumulative steps update on user profile if needed
       if (steps !== undefined) {
         user.steps = (user.steps || 0) + Number(steps);
       }
@@ -78,7 +78,7 @@ const logExerciseOrSteps = async (req, res, next) => {
         }
       }
 
-      // 🟢 Badge Auto-Unlock Evaluation Logic for Steps
+      // 🟢 Badge Auto-Unlock Evaluation Logic (Checking Daily Record Steps & User Stats)
       if (!user.unlockedBadges) user.unlockedBadges = [];
       const earnedBadgeIds = user.unlockedBadges.map((b) =>
         typeof b === "string" ? b : b.badgeId,
@@ -93,9 +93,13 @@ const logExerciseOrSteps = async (req, res, next) => {
         { count: 30000, id: "steps_30k" },
       ];
 
+      // Check against today's record steps OR cumulative user steps
+      const currentDailySteps = record.steps || 0;
+
       stepMilestones.forEach((milestone) => {
         if (
-          user.steps >= milestone.count &&
+          (currentDailySteps >= milestone.count ||
+            (user.steps && user.steps >= milestone.count)) &&
           !earnedBadgeIds.includes(milestone.id)
         ) {
           user.unlockedBadges.push({
