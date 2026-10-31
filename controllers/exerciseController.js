@@ -85,12 +85,12 @@ const logExerciseOrSteps = async (req, res, next) => {
       );
 
       const stepMilestones = [
-        { count: 5000, id: "steps_5k" },
-        { count: 10000, id: "steps_10k" },
-        { count: 15000, id: "steps_15k" },
-        { count: 20000, id: "steps_20k" },
-        { count: 25000, id: "steps_25k" },
-        { count: 30000, id: "steps_30k" },
+        { count: 5000, id: "step_5k" },
+        { count: 10000, id: "step_10k" },
+        { count: 15000, id: "step_15k" },
+        { count: 20000, id: "step_20k" },
+        { count: 25000, id: "step_25k" },
+        { count: 30000, id: "step_30k" },
       ];
 
       // Check against today's record steps OR cumulative user steps
