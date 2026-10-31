@@ -1,8 +1,8 @@
 const ChatMessage = require("../models/ChatMessage");
 const User = require("../models/User");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const connectDB = require("../config/db"); // 🟢 Database Connection Import
-const { callGeminiWithRetry } = require("../utils/aiHelper"); // 🟢 Retry Helper Import
+const connectDB = require("../config/db");
+const { callGeminiWithRetry } = require("../utils/aiHelper");
 
 // Initialize Google Generative AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -12,11 +12,11 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
  */
 const handleChat = async (req, res) => {
   try {
-    // 🟢 Ensure MongoDB is connected first
+    // 🟢 Ensure DB Connection First
     await connectDB();
 
-    const rawUser = req.user;
     const { message, model } = req.body;
+    const userId = req.user._id; // Strict Authentication Binding
 
     // Input Validation
     if (!message || typeof message !== "string" || !message.trim()) {
@@ -26,9 +26,7 @@ const handleChat = async (req, res) => {
       });
     }
 
-    const userId = rawUser._id || rawUser.id;
-
-    // Fetch fresh user data directly from MongoDB
+    // 🟢 Fetch user profile strictly by authenticated userId
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
@@ -37,7 +35,7 @@ const handleChat = async (req, res) => {
       });
     }
 
-    // Daily Reset Check for Free Chat Allowance
+    // 🟢 Midnight Daily Reset Check for Free Allowance
     const today = new Date().setHours(0, 0, 0, 0);
     const lastChatDay = new Date(user.lastChatDate || 0).setHours(0, 0, 0, 0);
 
@@ -63,7 +61,7 @@ const handleChat = async (req, res) => {
       });
     }
 
-    // Construct User Profile Details Context (Safe Optional Fallbacks)
+    // User Context Grounding
     const userProfileContext = [
       `User Name: ${user.name || user.username || "Member"}`,
       `Subscription Plan: ${currentTier.toUpperCase()} (${isFreeTier ? "Free Tier Plan" : "Pro Plan Active"})`,
@@ -80,14 +78,12 @@ const handleChat = async (req, res) => {
       `Height: ${user.height ? `${user.height} cm` : "Not provided"}`,
     ].join("\n");
 
-    // Fetch recent chat history from MongoDB (Optimized Token Cost via Truncation)
-    const rawHistory = await ChatMessage.find({
-      $or: [{ user: userId }, { userId: userId }],
-    })
+    // 🟢 Fetch recent chat history strictly isolated to this user
+    const rawHistory = await ChatMessage.find({ user: userId })
       .sort({ createdAt: -1, _id: -1 })
       .limit(10);
 
-    // Format chat history & truncate old messages (>400 chars) to save tokens
+    // Truncate long messages (>400 chars) to save Gemini API token costs
     const formattedHistory = rawHistory.reverse().map((msg) => {
       const msgText = msg.text || "";
       const truncatedText =
@@ -99,8 +95,8 @@ const handleChat = async (req, res) => {
       };
     });
 
-    // Configure Gemini AI Model
-    const selectedModel = model || "gemini-1.5-flash";
+    // Configure Gemini Model (Fallback supported)
+    const selectedModel = model || "gemini-3.5-flash-lite"; // Default to Gemini 3.5 if not specified
     const geminiModel = genAI.getGenerativeModel({
       model: selectedModel,
       systemInstruction: `You are NutriBot, an expert AI nutritionist and fitness coach for the NutriMorph application.
@@ -115,33 +111,31 @@ STRICT INSTRUCTIONS:
 3. Personalization: Use the user's name, daily calorie goal, weight, height, and target goals naturally.
 4. Tone & Style: Be encouraging, concise, informative, and clear in English.
 5. Avoid Speculation: Do not provide medical advice, diagnoses, or treatment plans. Refer users to certified professionals for health concerns.
-6. No Sensitive Data: Do not request or store sensitive personal information such as passwords, financial data, or health records.
-7. No External Links: Do not provide external links or references.
-8. Clarification: If the user's message is unclear, ask for clarification politely.`,
+6. No Sensitive Data: Do not request or store sensitive personal information.
+7. No External Links: Do not provide external links or references.`,
     });
 
-    // Start Chat session with formatted conversation history
+    // Start Chat Session
     const chatSession = geminiModel.startChat({
       history: formattedHistory,
     });
 
-    // 🟢 Call Gemini with Exponential Backoff Retry Wrapper
+    // Call Gemini with Exponential Backoff Retry Wrapper
     const result = await callGeminiWithRetry(async () => {
       return await chatSession.sendMessage(message.trim());
     });
 
     const responseText = result.response.text();
 
-    // Increment chat usage count for free tier users
+    // Increment chat count
     if (isFreeTier) {
       user.dailyChatCount += 1;
     }
     await user.save();
 
-    // Save user & bot messages sequentially
+    // 🟢 Save user & bot messages strictly bound to user._id
     const userMsgDoc = await ChatMessage.create({
       user: userId,
-      userId: userId,
       role: "user",
       sender: "user",
       text: message.trim(),
@@ -149,13 +143,11 @@ STRICT INSTRUCTIONS:
 
     const botMsgDoc = await ChatMessage.create({
       user: userId,
-      userId: userId,
       role: "bot",
       sender: "bot",
       text: responseText.trim(),
     });
 
-    // Return unified success payload
     return res.status(200).json({
       success: true,
       reply: responseText,
@@ -177,22 +169,23 @@ STRICT INSTRUCTIONS:
 };
 
 /**
- * Fetch Chat History for authenticated user
+ * Fetch Chat History strictly isolated for authenticated user
  */
 const getChatHistory = async (req, res) => {
   try {
-    // 🟢 Ensure MongoDB is connected
     await connectDB();
 
-    const userId = req.user?._id || req.user?.id;
+    const userId = req.user?._id;
 
     if (!userId) {
       return res.status(401).json({ message: "User not authenticated." });
     }
 
-    const history = await ChatMessage.find({
-      $or: [{ user: userId }, { userId: userId }],
-    }).sort({ createdAt: 1, _id: 1 });
+    // 🟢 Strict query isolation by user ID
+    const history = await ChatMessage.find({ user: userId }).sort({
+      createdAt: 1,
+      _id: 1,
+    });
 
     return res.status(200).json({ history: history || [] });
   } catch (error) {

@@ -58,7 +58,7 @@ const analyzeMealText = async (req, res) => {
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: "gemini-3.5-flash-lite",
+      model: "gemini-2.5-flash-lite", // 🟢 Standardized project model version
       generationConfig: { temperature: 0.2 },
     });
 
@@ -234,7 +234,7 @@ const getWeeklySummary = async (req, res) => {
       if (apiKey) {
         const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({
-          model: "gemini-3.5-flash-lite",
+          model: "gemini-3.5-flash-lite", // 🟢 Standardized project model version
         });
         const prompt = `Analyze this weekly nutrition summary data and provide a concise, encouraging 2-sentence health tip or insight in English: ${JSON.stringify(completeWeeklyData)}`;
 
@@ -286,11 +286,11 @@ const logMeal = async (req, res, next) => {
       protein: Number(protein) || 0,
       carbs: Number(carbs) || 0,
       fats: Number(fats) || 0,
-      mealType: mealType || "Lunch", // 🟢 Added mealType tagging support
+      mealType: mealType || "Lunch",
       date: userLocalDate,
     });
 
-    // 🟢 Gamification Logic: Update Streak & Check Exercise Badges
+    // Gamification Logic: Update Streak & Check Badges
     let updatedStreak = 1;
     let newUnlockedBadge = null;
 
@@ -305,7 +305,6 @@ const logMeal = async (req, res, next) => {
       dbUser.lastLoggedDate = streakResult.lastLoggedDate;
       updatedStreak = streakResult.streak;
 
-      // Badges Check Logic based on Streak Days
       const existingBadgeIds = (dbUser.unlockedBadges || []).map(
         (b) => b.badgeId,
       );
