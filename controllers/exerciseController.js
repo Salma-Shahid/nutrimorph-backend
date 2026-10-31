@@ -2,12 +2,13 @@ const Exercise = require("../models/ExerciseModel");
 const User = require("../models/User");
 const AppError = require("../utils/appError");
 
-// Get Daily Exercise & Steps Summary
+// 🟢 Get Daily Exercise & Steps Summary (Strict Per-User Isolation)
 const getExerciseData = async (req, res, next) => {
   try {
     const { date } = req.query;
     const userId = req.user._id;
 
+    // Strict Query Isolation by User ID
     let record = await Exercise.findOne({ user: userId, date });
     if (!record) {
       record = { steps: 0, caloriesBurned: 0, exerciseName: "" };
@@ -22,13 +23,14 @@ const getExerciseData = async (req, res, next) => {
   }
 };
 
-// Log Exercise or Update Steps with Accurate Streak & Badges Evaluator
+// 🟢 Log Exercise or Update Steps with Accurate Streak & Badges Evaluator
 const logExerciseOrSteps = async (req, res, next) => {
   try {
     const { date, steps, caloriesBurned, exerciseName } = req.body;
     const userId = req.user._id;
     const logDate = date || new Date().toISOString().split("T")[0];
 
+    // 1. Atomic Upsert for Daily Exercise Log Linked to Logged-in User
     let record = await Exercise.findOne({ user: userId, date: logDate });
 
     if (record) {
@@ -47,10 +49,10 @@ const logExerciseOrSteps = async (req, res, next) => {
       });
     }
 
-    // 🟢 Fetch User Profile strictly by authenticated userId
+    // 2. Fetch User Profile Strictly by Authenticated User ID
     const user = await User.findById(userId);
     if (user) {
-      // Cumulative total steps update
+      // Cumulative steps update
       if (steps !== undefined) {
         user.steps = (user.steps || 0) + Number(steps);
       }
@@ -68,15 +70,12 @@ const logExerciseOrSteps = async (req, res, next) => {
         const diffDays = Math.round((curr - last) / (1000 * 60 * 60 * 24));
 
         if (diffDays === 1) {
-          // Consecutive day log -> Increment streak
           user.streakCount = (user.streakCount || 0) + 1;
           user.lastLoggedDate = todayStr;
         } else if (diffDays > 1) {
-          // Streak broken -> Reset to 1
           user.streakCount = 1;
           user.lastLoggedDate = todayStr;
         }
-        // If diffDays === 0 (same day), do nothing to streak count
       }
 
       // 🟢 Badge Auto-Unlock Evaluation Logic for Steps
