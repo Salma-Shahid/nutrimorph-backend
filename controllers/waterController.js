@@ -13,11 +13,8 @@ const updateWaterIntake = async (req, res) => {
         .json({ success: false, message: "User not found" });
     }
 
-    // Water intake update logic (Aap apne existing water schema ke mutabiq adjust kar sakti hain)
     user.waterIntake = waterIntake;
-
-    // 💧 Water Badges Check Logic
-    const totalMl = (waterIntake || 0) * 250; // 1 glass = 250ml
+    const totalMl = Number(waterIntake || 0); // Assuming waterIntake is passed in ml or glasses depending on your setup
     let newlyUnlocked = [];
 
     const waterMilestones = [

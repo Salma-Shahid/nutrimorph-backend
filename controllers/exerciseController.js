@@ -1,5 +1,5 @@
 const Exercise = require("../models/ExerciseModel");
-const User = require("../models/User"); // 🟢 User model import kiya
+const User = require("../models/User");
 const AppError = require("../utils/appError");
 
 // Get Daily Exercise & Steps Summary
@@ -22,13 +22,14 @@ const getExerciseData = async (req, res, next) => {
   }
 };
 
-// Log Exercise or Update Steps with Auto Streak & Badges Evaluator
+// Log Exercise or Update Steps with Accurate Streak & Badges Evaluator
 const logExerciseOrSteps = async (req, res, next) => {
   try {
     const { date, steps, caloriesBurned, exerciseName } = req.body;
     const userId = req.user._id;
+    const logDate = date || new Date().toISOString().split("T")[0];
 
-    let record = await Exercise.findOne({ user: userId, date });
+    let record = await Exercise.findOne({ user: userId, date: logDate });
 
     if (record) {
       if (steps !== undefined) record.steps += Number(steps);
@@ -39,45 +40,71 @@ const logExerciseOrSteps = async (req, res, next) => {
     } else {
       record = await Exercise.create({
         user: userId,
-        date,
+        date: logDate,
         steps: steps || 0,
         caloriesBurned: caloriesBurned || 0,
         exerciseName: exerciseName || "",
       });
     }
 
-    // 🟢 1. Fetch User Profile to update Streak & Total cumulative steps
+    // 🟢 Fetch User Profile strictly by authenticated userId
     const user = await User.findById(userId);
     if (user) {
-      // Total steps cumulative update (or fetch from exercise sum)
+      // Cumulative total steps update
       if (steps !== undefined) {
         user.steps = (user.steps || 0) + Number(steps);
       }
 
-      // 🟢 2. Streak Management Logic
-      const todayStr = date || new Date().toISOString().split("T")[0];
-      if (user.lastLoggedDate !== todayStr) {
-        user.streakCount = (user.streakCount || 0) + 1;
+      // 🟢 Robust Streak Management Logic
+      const todayStr = logDate;
+      const lastDate = user.lastLoggedDate;
+
+      if (!lastDate) {
+        user.streakCount = 1;
         user.lastLoggedDate = todayStr;
+      } else if (lastDate !== todayStr) {
+        const last = new Date(lastDate);
+        const curr = new Date(todayStr);
+        const diffDays = Math.round((curr - last) / (1000 * 60 * 60 * 24));
+
+        if (diffDays === 1) {
+          // Consecutive day log -> Increment streak
+          user.streakCount = (user.streakCount || 0) + 1;
+          user.lastLoggedDate = todayStr;
+        } else if (diffDays > 1) {
+          // Streak broken -> Reset to 1
+          user.streakCount = 1;
+          user.lastLoggedDate = todayStr;
+        }
+        // If diffDays === 0 (same day), do nothing to streak count
       }
 
-      // 🟢 3. Badge Auto-Unlock Evaluation Logic
+      // 🟢 Badge Auto-Unlock Evaluation Logic for Steps
       if (!user.unlockedBadges) user.unlockedBadges = [];
-      const earnedBadgeIds = user.unlockedBadges.map((b) => b.badgeId);
+      const earnedBadgeIds = user.unlockedBadges.map((b) =>
+        typeof b === "string" ? b : b.badgeId,
+      );
 
-      // Example Thresholds: 5,000 steps & 10,000 steps
-      if (user.steps >= 5000 && !earnedBadgeIds.includes("steps_5k")) {
-        user.unlockedBadges.push({
-          badgeId: "steps_5k",
-          unlockedAt: new Date(),
-        });
-      }
-      if (user.steps >= 10000 && !earnedBadgeIds.includes("steps_10k")) {
-        user.unlockedBadges.push({
-          badgeId: "steps_10k",
-          unlockedAt: new Date(),
-        });
-      }
+      const stepMilestones = [
+        { count: 5000, id: "steps_5k" },
+        { count: 10000, id: "steps_10k" },
+        { count: 15000, id: "steps_15k" },
+        { count: 20000, id: "steps_20k" },
+        { count: 25000, id: "steps_25k" },
+        { count: 30000, id: "steps_30k" },
+      ];
+
+      stepMilestones.forEach((milestone) => {
+        if (
+          user.steps >= milestone.count &&
+          !earnedBadgeIds.includes(milestone.id)
+        ) {
+          user.unlockedBadges.push({
+            badgeId: milestone.id,
+            unlockedAt: new Date(),
+          });
+        }
+      });
 
       await user.save();
     }
@@ -86,7 +113,11 @@ const logExerciseOrSteps = async (req, res, next) => {
       success: true,
       data: record,
       userStats: user
-        ? { streakCount: user.streakCount, unlockedBadges: user.unlockedBadges }
+        ? {
+            steps: user.steps,
+            streakCount: user.streakCount,
+            unlockedBadges: user.unlockedBadges,
+          }
         : null,
       message: "Exercise and steps updated successfully!",
     });
