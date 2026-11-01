@@ -1,6 +1,8 @@
 const User = require("../models/User");
 const Meal = require("../models/Meal");
 const Exercise = require("../models/ExerciseModel");
+const Review = require("../models/Review");
+const ActivityLog = require("../models/ActivityLog");
 
 // 1. Get Platform Stats & Metrics
 const getAdminStats = async (req, res, next) => {
@@ -66,6 +68,14 @@ const updateUserTier = async (req, res, next) => {
         .json({ success: false, message: "User not found" });
     }
 
+    // 🛡️ Create Audit Activity Log
+    await ActivityLog.create({
+      admin: req.user._id,
+      adminEmail: req.user.email,
+      action: "UPDATE_TIER",
+      details: `Changed user ${user.email} subscription tier to '${subscriptionTier}'`,
+    });
+
     return res.status(200).json({
       success: true,
       message: `User subscription updated to ${subscriptionTier}`,
@@ -92,6 +102,14 @@ const deleteUser = async (req, res, next) => {
     await Meal.deleteMany({ $or: [{ userId: id }, { user: id }] });
     await Exercise.deleteMany({ user: id });
 
+    // 🛡️ Create Audit Activity Log
+    await ActivityLog.create({
+      admin: req.user._id,
+      adminEmail: req.user.email,
+      action: "DELETE_USER",
+      details: `Deleted user account ${user.email} and associated data`,
+    });
+
     return res.status(200).json({
       success: true,
       message: "User and associated data deleted successfully",
@@ -101,12 +119,13 @@ const deleteUser = async (req, res, next) => {
   }
 };
 
+// 5. Get Revenue Statistics
 const getRevenueStats = async (req, res) => {
   try {
     const proUsersCount = await User.countDocuments({
       subscriptionTier: "pro",
     });
-    const estimatedRevenue = proUsersCount * 9.99; // Maslan $9.99 per pro user
+    const estimatedRevenue = proUsersCount * 9.99; // $9.99 per pro user
 
     res.status(200).json({
       success: true,
@@ -121,7 +140,7 @@ const getRevenueStats = async (req, res) => {
   }
 };
 
-// Get all reviews for moderation
+// 6. Get all reviews for moderation
 const getAllReviews = async (req, res) => {
   try {
     const reviews = await Review.find()
@@ -137,7 +156,7 @@ const getAllReviews = async (req, res) => {
   }
 };
 
-// Delete or moderate review
+// 7. Delete or moderate review
 const deleteReview = async (req, res) => {
   try {
     const review = await Review.findById(req.params.id);
@@ -147,6 +166,15 @@ const deleteReview = async (req, res) => {
         .json({ success: false, message: "Review not found" });
     }
     await review.deleteOne();
+
+    // 🛡️ Create Audit Activity Log
+    await ActivityLog.create({
+      admin: req.user._id,
+      adminEmail: req.user.email,
+      action: "DELETE_REVIEW",
+      details: `Deleted user review ID: ${req.params.id}`,
+    });
+
     res
       .status(200)
       .json({ success: true, message: "Review deleted successfully" });
@@ -155,10 +183,10 @@ const deleteReview = async (req, res) => {
   }
 };
 
-// Broadcast Notification to Users
+// 8. Broadcast Notification to Users
 const sendBroadcast = async (req, res) => {
   try {
-    const { title, message, targetAudience } = req.body; // targetAudience: 'all', 'pro', 'free'
+    const { title, message, targetAudience } = req.body;
 
     if (!title || !message) {
       return res
@@ -166,7 +194,6 @@ const sendBroadcast = async (req, res) => {
         .json({ success: false, message: "Title and message are required" });
     }
 
-    // Filter query based on target audience
     let query = {};
     if (targetAudience === "pro") {
       query.subscriptionTier = "pro";
@@ -176,22 +203,32 @@ const sendBroadcast = async (req, res) => {
 
     const targetUsers = await User.find(query).select("_id email");
 
-    // Aap yahan Notification model mein save kar sakti hain ya email send kar sakti hain
-    // Maslan hum database mein notification record create kar rahe hain:
-    /*
-    const notifications = targetUsers.map(user => ({
-      user: user._id,
-      title,
-      message,
-      type: "broadcast"
-    }));
-    await Notification.insertMany(notifications);
-    */
+    // 🛡️ Create Audit Activity Log
+    await ActivityLog.create({
+      admin: req.user._id,
+      adminEmail: req.user.email,
+      action: "BROADCAST",
+      details: `Sent broadcast notification '${title}' to ${targetUsers.length} (${targetAudience || "all"}) users`,
+    });
 
     res.status(200).json({
       success: true,
       message: `Broadcast successfully sent to ${targetUsers.length} users (${targetAudience || "all"}).`,
       recipientCount: targetUsers.length,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// 9. Get all audit logs
+const getActivityLogs = async (req, res) => {
+  try {
+    const logs = await ActivityLog.find().sort({ createdAt: -1 }).limit(50);
+    res.status(200).json({
+      success: true,
+      count: logs.length,
+      data: logs,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -207,4 +244,5 @@ module.exports = {
   getAllReviews,
   deleteReview,
   sendBroadcast,
+  getActivityLogs,
 };

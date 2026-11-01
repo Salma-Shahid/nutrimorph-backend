@@ -9,7 +9,8 @@ const {
   getRevenueStats,
   getAllReviews,
   deleteReview,
-  sendBroadcast, // Import broadcast controller
+  sendBroadcast, 
+  getActivityLogs,
 } = require("../controllers/adminController");
 
 const { protect } = require("../middlewares/authMiddleware");
@@ -28,5 +29,7 @@ router.get("/reviews", getAllReviews);
 router.delete("/reviews/:id", deleteReview);
 // Broadcast route
 router.post("/broadcast", sendBroadcast);
+// Activity logs route
+router.get("/logs", getActivityLogs);
 
 module.exports = router;
