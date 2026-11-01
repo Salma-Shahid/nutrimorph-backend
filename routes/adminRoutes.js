@@ -9,8 +9,9 @@ const {
   getRevenueStats,
   getAllReviews,
   deleteReview,
-  sendBroadcast, 
+  sendBroadcast,
   getActivityLogs,
+  getApiUsageStats,
 } = require("../controllers/adminController");
 
 const { protect } = require("../middlewares/authMiddleware");
@@ -31,5 +32,7 @@ router.delete("/reviews/:id", deleteReview);
 router.post("/broadcast", sendBroadcast);
 // Activity logs route
 router.get("/logs", getActivityLogs);
+// API usage stats route
+router.get("/api-stats", getApiUsageStats);
 
 module.exports = router;
