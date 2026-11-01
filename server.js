@@ -28,6 +28,7 @@ const mealPlanRoutes = require("./routes/mealPlanRoutes");
 const initCronJobs = require("./utils/cronJobs");
 const reviewRoutes = require("./routes/reviewRoutes");
 const exerciseRoutes = require("./routes/exerciseRoutes");
+const adminRoutes = require("./routes/adminRoutes");
 const app = express();
 
 // Global CORS Configuration - Updated for Expo Web & Mobile Clients
@@ -86,7 +87,7 @@ app.use("/api/meal-plans", mealPlanRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/recipes", require("./routes/recipeRoutes.js"));
 app.use("/api/exercise", exerciseRoutes);
-
+app.use("/api/admin", adminRoutes);
 app.get("/", (req, res) => {
   res.send("NutriMorph Backend Running...");
 });

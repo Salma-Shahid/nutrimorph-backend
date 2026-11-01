@@ -6,6 +6,13 @@ const userSchema = new mongoose.Schema(
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
 
+    // 👑 Role & Permissions (New for Admin Dashboard)
+    role: {
+      type: String,
+      enum: ["user", "admin"],
+      default: "user",
+    },
+
     // 📧 Email Verification Fields
     isVerified: { type: Boolean, default: false },
     verificationToken: { type: String },
@@ -41,7 +48,7 @@ const userSchema = new mongoose.Schema(
     goal: { type: String },
     fitnessGoal: { type: String },
     activityLevel: { type: String },
-    medicalCondition: { type: String, default: "None" }, // 🟢 Added for medical history
+    medicalCondition: { type: String, default: "None" },
     preferredMealsCount: { type: Number, default: 4 },
     dailyCalories: { type: Number, default: 2000 },
     dailyCalorieGoal: { type: Number, default: 2000 },
@@ -52,14 +59,14 @@ const userSchema = new mongoose.Schema(
     },
 
     // 🔥 Gamification & Engagement (Streak & Badges)
-    streakCount: { type: Number, default: 0 }, // 🟢 Daily consecutive logging streak
-    lastLoggedDate: { type: String, default: null }, // 🟢 Format: "YYYY-MM-DD"
+    streakCount: { type: Number, default: 0 },
+    lastLoggedDate: { type: String, default: null },
     unlockedBadges: [
       {
         badgeId: { type: String, required: true },
         unlockedAt: { type: Date, default: Date.now },
       },
-    ], // 🟢 Unlocked achievement badges list
+    ],
   },
   { timestamps: true },
 );
