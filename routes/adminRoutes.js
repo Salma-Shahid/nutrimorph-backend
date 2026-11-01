@@ -15,6 +15,8 @@ const {
   testEmailSystem,
   cleanupDatabase,
   syncServicesHealth,
+  purgeCloudinaryStorage,
+  getExpoBuildsStatus,
 } = require("../controllers/adminController");
 
 const { protect } = require("../middlewares/authMiddleware");
@@ -41,5 +43,8 @@ router.get("/api-stats", getApiUsageStats);
 router.post("/test-email", testEmailSystem);
 router.post("/cleanup-db", cleanupDatabase);
 router.post("/sync-services", syncServicesHealth);
+router.post("/purge-cloudinary", purgeCloudinaryStorage);
+router.get("/expo-builds", getExpoBuildsStatus);
+
 
 module.exports = router;
