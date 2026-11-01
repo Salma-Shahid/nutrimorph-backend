@@ -3,6 +3,7 @@ const Meal = require("../models/Meal");
 const Exercise = require("../models/ExerciseModel");
 const Review = require("../models/Review");
 const ActivityLog = require("../models/ActivityLog");
+const sendEmail = require("../utils/sendEmail"); // ✅ Import email utility
 
 // 1. Get Platform Stats & Metrics
 const getAdminStats = async (req, res, next) => {
@@ -183,7 +184,7 @@ const deleteReview = async (req, res) => {
   }
 };
 
-// 8. Broadcast Notification to Users
+// 8. Broadcast Notification & Automated Email to Users
 const sendBroadcast = async (req, res) => {
   try {
     const { title, message, targetAudience } = req.body;
@@ -201,19 +202,41 @@ const sendBroadcast = async (req, res) => {
       query.subscriptionTier = { $ne: "pro" };
     }
 
-    const targetUsers = await User.find(query).select("_id email");
+    const targetUsers = await User.find(query).select("email name");
+
+    // Loop through users and send automated HTML emails asynchronously
+    const emailPromises = targetUsers.map((user) => {
+      const htmlContent = `
+        <div style="font-family: Arial, sans-serif; background-color: #030712; color: #f3f4f6; padding: 25px; border-radius: 12px; border: 1px solid #1f2937;">
+          <h2 style="color: #34d399; margin-top: 0;">NutriMorph Announcement 🚀</h2>
+          <h3 style="color: #ffffff; font-size: 18px;">${title}</h3>
+          <p style="font-size: 15px; color: #d1d5db; line-height: 1.6;">${message}</p>
+          <hr style="border-color: #1f2937; margin: 20px 0;" />
+          <p style="font-size: 12px; color: #9ca3af; margin-bottom: 0;">You received this automated broadcast email because you are a valued member of NutriMorph.</p>
+        </div>
+      `;
+      return sendEmail({
+        email: user.email,
+        subject: title,
+        html: htmlContent,
+      }).catch((err) =>
+        console.error(`Failed to send email to ${user.email}:`, err.message),
+      );
+    });
+
+    await Promise.all(emailPromises);
 
     // 🛡️ Create Audit Activity Log
     await ActivityLog.create({
       admin: req.user._id,
       adminEmail: req.user.email,
-      action: "BROADCAST",
-      details: `Sent broadcast notification '${title}' to ${targetUsers.length} (${targetAudience || "all"}) users`,
+      action: "BROADCAST_EMAIL",
+      details: `Sent broadcast email '${title}' to ${targetUsers.length} (${targetAudience || "all"}) users`,
     });
 
     res.status(200).json({
       success: true,
-      message: `Broadcast successfully sent to ${targetUsers.length} users (${targetAudience || "all"}).`,
+      message: `Broadcast emails successfully sent to ${targetUsers.length} users (${targetAudience || "all"}).`,
       recipientCount: targetUsers.length,
     });
   } catch (error) {
