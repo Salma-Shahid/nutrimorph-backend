@@ -12,6 +12,9 @@ const {
   sendBroadcast,
   getActivityLogs,
   getApiUsageStats,
+  testEmailSystem,
+  cleanupDatabase,
+  syncServicesHealth,
 } = require("../controllers/adminController");
 
 const { protect } = require("../middlewares/authMiddleware");
@@ -34,5 +37,9 @@ router.post("/broadcast", sendBroadcast);
 router.get("/logs", getActivityLogs);
 // API usage stats route
 router.get("/api-stats", getApiUsageStats);
+
+router.post("/test-email", testEmailSystem);
+router.post("/cleanup-db", cleanupDatabase);
+router.post("/sync-services", syncServicesHealth);
 
 module.exports = router;
