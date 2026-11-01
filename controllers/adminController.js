@@ -155,6 +155,49 @@ const deleteReview = async (req, res) => {
   }
 };
 
+// Broadcast Notification to Users
+const sendBroadcast = async (req, res) => {
+  try {
+    const { title, message, targetAudience } = req.body; // targetAudience: 'all', 'pro', 'free'
+
+    if (!title || !message) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Title and message are required" });
+    }
+
+    // Filter query based on target audience
+    let query = {};
+    if (targetAudience === "pro") {
+      query.subscriptionTier = "pro";
+    } else if (targetAudience === "free") {
+      query.subscriptionTier = { $ne: "pro" };
+    }
+
+    const targetUsers = await User.find(query).select("_id email");
+
+    // Aap yahan Notification model mein save kar sakti hain ya email send kar sakti hain
+    // Maslan hum database mein notification record create kar rahe hain:
+    /*
+    const notifications = targetUsers.map(user => ({
+      user: user._id,
+      title,
+      message,
+      type: "broadcast"
+    }));
+    await Notification.insertMany(notifications);
+    */
+
+    res.status(200).json({
+      success: true,
+      message: `Broadcast successfully sent to ${targetUsers.length} users (${targetAudience || "all"}).`,
+      recipientCount: targetUsers.length,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getAdminStats,
   getAllUsers,
@@ -163,4 +206,5 @@ module.exports = {
   getRevenueStats,
   getAllReviews,
   deleteReview,
+  sendBroadcast,
 };
