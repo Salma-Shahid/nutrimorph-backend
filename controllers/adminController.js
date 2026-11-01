@@ -101,9 +101,66 @@ const deleteUser = async (req, res, next) => {
   }
 };
 
+const getRevenueStats = async (req, res) => {
+  try {
+    const proUsersCount = await User.countDocuments({
+      subscriptionTier: "pro",
+    });
+    const estimatedRevenue = proUsersCount * 9.99; // Maslan $9.99 per pro user
+
+    res.status(200).json({
+      success: true,
+      data: {
+        totalRevenue: estimatedRevenue,
+        activeSubscriptions: proUsersCount,
+        currency: "USD",
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Get all reviews for moderation
+const getAllReviews = async (req, res) => {
+  try {
+    const reviews = await Review.find()
+      .sort({ createdAt: -1 })
+      .populate("user", "name email");
+    res.status(200).json({
+      success: true,
+      count: reviews.length,
+      data: reviews,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Delete or moderate review
+const deleteReview = async (req, res) => {
+  try {
+    const review = await Review.findById(req.params.id);
+    if (!review) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Review not found" });
+    }
+    await review.deleteOne();
+    res
+      .status(200)
+      .json({ success: true, message: "Review deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getAdminStats,
   getAllUsers,
   updateUserTier,
   deleteUser,
+  getRevenueStats,
+  getAllReviews,
+  deleteReview,
 };
