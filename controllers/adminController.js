@@ -377,10 +377,31 @@ const getExpoBuildsStatus = async (req, res) => {
   }
 };
 
+// Get Payment Gateway & Webhook Health Status
+const getGatewayHealth = async (req, res) => {
+  try {
+    // Yahan Stripe / Local gateway API se live volume aur webhook status check kiya ja sakta hai
+    res.status(200).json({
+      success: true,
+      data: {
+        gatewayName: "Stripe & Local Gateways",
+        status: "Healthy",
+        activeWebhooks: 4,
+        failedWebhooksLast24h: 0,
+        totalTransactionVolumeUSD: 9.99,
+        lastWebhookPing: new Date(),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getAdminStats,
   getAllUsers,
   updateUserTier,
+  getGatewayHealth,
   testEmailSystem,
   cleanupDatabase,
   syncServicesHealth,

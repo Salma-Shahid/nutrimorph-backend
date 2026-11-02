@@ -17,6 +17,7 @@ const {
   syncServicesHealth,
   purgeCloudinaryStorage,
   getExpoBuildsStatus,
+  getGatewayHealth,
 } = require("../controllers/adminController");
 
 const { protect } = require("../middlewares/authMiddleware");
@@ -45,6 +46,6 @@ router.post("/cleanup-db", cleanupDatabase);
 router.post("/sync-services", syncServicesHealth);
 router.post("/purge-cloudinary", purgeCloudinaryStorage);
 router.get("/expo-builds", getExpoBuildsStatus);
-
+router.get("/gateway-health", getGatewayHealth);
 
 module.exports = router;
