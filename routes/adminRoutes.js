@@ -18,6 +18,7 @@ const {
   purgeCloudinaryStorage,
   getExpoBuildsStatus,
   getGatewayHealth,
+  testWebhookPing,
 } = require("../controllers/adminController");
 
 const { protect } = require("../middlewares/authMiddleware");
@@ -45,6 +46,7 @@ router.post("/test-email", testEmailSystem);
 router.post("/cleanup-db", cleanupDatabase);
 router.post("/sync-services", syncServicesHealth);
 router.post("/purge-cloudinary", purgeCloudinaryStorage);
+router.post("/test-webhook", testWebhookPing);
 router.get("/expo-builds", getExpoBuildsStatus);
 router.get("/gateway-health", getGatewayHealth);
 
