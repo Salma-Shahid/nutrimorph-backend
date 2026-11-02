@@ -403,7 +403,25 @@ const testWebhookPing = async (req, res) => {
     // Yahan webhook simulation ping ya Stripe endpoint check kiya ja sakta hai
     res.status(200).json({
       success: true,
-      message: "Webhook simulation ping successful! All event endpoints responding properly.",
+      message:
+        "Webhook simulation ping successful! All event endpoints responding properly.",
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Update Service Configuration (API Keys / Tokens / Billing Secret)
+const updateServiceConfig = async (req, res) => {
+  try {
+    const { service, apiKey } = req.body;
+
+    // Yahan aap service config ko update karne ka logic ya database entry save kar sakti hain
+    console.log(`Updated configuration for service: ${service}`);
+
+    res.status(200).json({
+      success: true,
+      message: `Configuration for ${service} updated successfully!`,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -414,6 +432,7 @@ module.exports = {
   getAdminStats,
   getAllUsers,
   updateUserTier,
+  updateServiceConfig,
   testWebhookPing,
   getGatewayHealth,
   testEmailSystem,
