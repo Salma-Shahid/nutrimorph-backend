@@ -26,15 +26,30 @@ const getExerciseData = async (req, res, next) => {
 // 🟢 Log Exercise or Update Steps with Accurate Streak & Badges Evaluator
 const logExerciseOrSteps = async (req, res, next) => {
   try {
-    const { date, steps, caloriesBurned, exerciseName } = req.body;
+    const { date, steps, stepsTotal, caloriesBurned, exerciseName } = req.body;
     const userId = req.user._id;
     const logDate = date || new Date().toISOString().split("T")[0];
 
+    if (
+      stepsTotal !== undefined &&
+      (!Number.isFinite(Number(stepsTotal)) || Number(stepsTotal) < 0)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "stepsTotal must be a non-negative number.",
+      });
+    }
+
     // 1. Atomic Upsert for Daily Exercise Log Linked to Logged-in User
     let record = await Exercise.findOne({ user: userId, date: logDate });
+    const previousDailySteps = Number(record?.steps) || 0;
 
     if (record) {
-      if (steps !== undefined) record.steps += Number(steps);
+      if (stepsTotal !== undefined) {
+        record.steps = Math.max(previousDailySteps, Number(stepsTotal));
+      } else if (steps !== undefined) {
+        record.steps += Number(steps);
+      }
       if (caloriesBurned !== undefined)
         record.caloriesBurned += Number(caloriesBurned);
       if (exerciseName) record.exerciseName = exerciseName;
@@ -43,7 +58,12 @@ const logExerciseOrSteps = async (req, res, next) => {
       record = await Exercise.create({
         user: userId,
         date: logDate,
-        steps: steps ? Number(steps) : 0,
+        steps:
+          stepsTotal !== undefined
+            ? Number(stepsTotal)
+            : steps
+              ? Number(steps)
+              : 0,
         caloriesBurned: caloriesBurned ? Number(caloriesBurned) : 0,
         exerciseName: exerciseName || "",
       });
@@ -52,9 +72,12 @@ const logExerciseOrSteps = async (req, res, next) => {
     // 2. Fetch User Profile Strictly by Authenticated User ID
     const user = await User.findById(userId);
     if (user) {
-      // Cumulative steps update on user profile if needed
-      if (steps !== undefined) {
-        user.steps = (user.steps || 0) + Number(steps);
+      if (stepsTotal !== undefined) {
+        user.steps =
+          (Number(user.steps) || 0) +
+          Math.max(0, (Number(record.steps) || 0) - previousDailySteps);
+      } else if (steps !== undefined) {
+        user.steps = (Number(user.steps) || 0) + Number(steps);
       }
 
       // 🟢 Robust Streak Management Logic
@@ -80,9 +103,11 @@ const logExerciseOrSteps = async (req, res, next) => {
 
       // 🟢 Badge Auto-Unlock Evaluation Logic (Checking Daily Record Steps & User Stats)
       if (!user.unlockedBadges) user.unlockedBadges = [];
-      const earnedBadgeIds = user.unlockedBadges.map((b) =>
-        typeof b === "string" ? b : b.badgeId,
-      );
+      const earnedBadgeIds = user.unlockedBadges.map((badge) => {
+        const badgeId =
+          typeof badge === "string" ? badge : badge?.badgeId || badge?.id;
+        return String(badgeId || "").replace(/^steps_/, "step_");
+      });
 
       const stepMilestones = [
         { count: 5000, id: "step_5k" },
@@ -99,7 +124,7 @@ const logExerciseOrSteps = async (req, res, next) => {
       stepMilestones.forEach((milestone) => {
         if (
           (currentDailySteps >= milestone.count ||
-            (user.steps && user.steps >= milestone.count)) &&
+            (Number(user.steps) || 0) >= milestone.count) &&
           !earnedBadgeIds.includes(milestone.id)
         ) {
           user.unlockedBadges.push({
@@ -118,6 +143,7 @@ const logExerciseOrSteps = async (req, res, next) => {
       userStats: user
         ? {
             steps: user.steps,
+            dailySteps: record.steps,
             streakCount: user.streakCount,
             unlockedBadges: user.unlockedBadges,
           }

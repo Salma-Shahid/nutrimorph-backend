@@ -91,7 +91,9 @@ router.get("/cancel", (req, res) => {
 // 4. Direct Verify Route
 router.post("/verify-payment", protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
+    const user = await User.findById(req.user._id).select(
+      "_id name email subscriptionTier isPro subscriptionExpiresAt",
+    );
     if (!user) return res.status(404).json({ message: "User not found" });
 
     res.json({

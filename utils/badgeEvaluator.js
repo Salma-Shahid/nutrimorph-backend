@@ -1,17 +1,26 @@
 const checkAndAwardBadges = (user, exerciseData) => {
   if (!user.unlockedBadges) user.unlockedBadges = [];
-  const earnedBadgeIds = user.unlockedBadges.map((b) => b.badgeId);
+  const earnedBadgeIds = user.unlockedBadges.map((badge) => {
+    const badgeId =
+      typeof badge === "string" ? badge : badge?.badgeId || badge?.id;
+    return String(badgeId || "").replace(/^steps_/, "step_");
+  });
 
   const steps = exerciseData?.steps || 0;
   const weightDiff = Math.abs(user.weightChange || 0);
 
-  // 1. Steps Badges Check
-  if (steps >= 5000 && !earnedBadgeIds.includes("steps_5k")) {
-    user.unlockedBadges.push({ badgeId: "steps_5k", unlockedAt: new Date() });
-  }
-  if (steps >= 10000 && !earnedBadgeIds.includes("steps_10k")) {
-    user.unlockedBadges.push({ badgeId: "steps_10k", unlockedAt: new Date() });
-  }
+  [
+    { count: 5000, badgeId: "step_5k" },
+    { count: 10000, badgeId: "step_10k" },
+    { count: 15000, badgeId: "step_15k" },
+    { count: 20000, badgeId: "step_20k" },
+    { count: 25000, badgeId: "step_25k" },
+    { count: 30000, badgeId: "step_30k" },
+  ].forEach(({ count, badgeId }) => {
+    if (steps >= count && !earnedBadgeIds.includes(badgeId)) {
+      user.unlockedBadges.push({ badgeId, unlockedAt: new Date() });
+    }
+  });
 
   // 2. Weight Loss/Gain Badges Check (e.g., 1kg, 3kg, 5kg, 10kg)
   if (weightDiff >= 1 && !earnedBadgeIds.includes("weight_1kg")) {

@@ -52,6 +52,7 @@ const userSchema = new mongoose.Schema(
     preferredMealsCount: { type: Number, default: 4 },
     dailyCalories: { type: Number, default: 2000 },
     dailyCalorieGoal: { type: Number, default: 2000 },
+    dailyCalorieTarget: { type: Number, default: 2000 },
     macros: {
       protein: { type: Number },
       carbs: { type: Number },
@@ -59,6 +60,7 @@ const userSchema = new mongoose.Schema(
     },
 
     // 🔥 Gamification & Engagement (Streak & Badges)
+    steps: { type: Number, default: 0 },
     streakCount: { type: Number, default: 0 },
     lastLoggedDate: { type: String, default: null },
     unlockedBadges: [

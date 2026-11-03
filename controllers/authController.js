@@ -195,6 +195,12 @@ const login = async (req, res) => {
       macros: user.macros || user.macrosTarget,
       weight: user.weight,
       height: user.height,
+      targetWeight: user.targetWeight,
+      dailyCalorieTarget:
+        user.dailyCalorieTarget || user.dailyCalorieGoal || user.dailyCalories,
+      medicalCondition: user.medicalCondition,
+      unlockedBadges: user.unlockedBadges || [],
+      steps: user.steps || 0,
       preferredMealsCount: user.preferredMealsCount || 4,
       token: generateToken(user._id),
     });
@@ -344,20 +350,30 @@ const completeOnboarding = async (req, res) => {
     }
 
     const {
+      name,
       language,
       gender,
       dob,
-      height, // { value: 170, unit: "cm" }
-      currentWeight, // { value: 75, unit: "kg" }
-      targetWeight, // { value: 65, unit: "kg" }
+      age: providedAge,
+      height,
+      weight,
+      currentWeight,
+      targetWeight,
       fitnessGoal,
+      goal,
       activityLevel,
       preferredMealsCount,
+      dailyCalorieTarget: providedCalorieTarget,
+      dailyCalories: providedDailyCalories,
+      proteinTarget,
+      carbsTarget,
+      fatsTarget,
+      medicalCondition,
+      bmi: providedBmi,
     } = req.body;
 
-    // 1. Age Calculation
-    let age = user.age || 25;
-    if (dob) {
+    let age = Number(providedAge) || user.age || 25;
+    if (!providedAge && dob) {
       const birthDate = new Date(dob);
       const today = new Date();
       age = today.getFullYear() - birthDate.getFullYear();
@@ -371,19 +387,29 @@ const completeOnboarding = async (req, res) => {
     }
 
     // 2. Unit Conversions
-    const heightVal = height?.value || user.height || 170;
-    const heightUnit = height?.unit || "cm";
+    const heightVal =
+      (typeof height === "object" ? height?.value : height) ||
+      user.height ||
+      170;
+    const heightUnit =
+      (typeof height === "object" ? height?.unit : null) || "cm";
     const heightInCm = heightUnit === "ft" ? heightVal * 30.48 : heightVal;
     const heightInMeters = heightInCm / 100;
 
-    const weightVal = currentWeight?.value || user.weight || 70;
-    const weightUnit = currentWeight?.unit || "kg";
+    const weightInput = currentWeight ?? weight;
+    const weightVal =
+      (typeof weightInput === "object" ? weightInput?.value : weightInput) ||
+      user.weight ||
+      70;
+    const weightUnit =
+      (typeof weightInput === "object" ? weightInput?.unit : null) || "kg";
     const weightInKg = weightUnit === "lbs" ? weightVal * 0.453592 : weightVal;
 
-    // 3. BMI Calculation
-    const bmi = parseFloat(
-      (weightInKg / (heightInMeters * heightInMeters)).toFixed(1),
-    );
+    const bmi =
+      Number(providedBmi) ||
+      parseFloat(
+        (weightInKg / (heightInMeters * heightInMeters)).toFixed(1),
+      );
     let bmiCategory = "Normal";
     if (bmi < 18.5) bmiCategory = "Underweight";
     else if (bmi >= 25 && bmi < 29.9) bmiCategory = "Overweight";
@@ -401,38 +427,50 @@ const completeOnboarding = async (req, res) => {
       "Very active": 1.725,
     };
 
+    const selectedGoal = fitnessGoal || goal || user.fitnessGoal || user.goal;
     let tdee = bmr * (activityMultipliers[activityLevel] || 1.375);
 
     // Goal Adjustments
-    if (fitnessGoal === "Lose Weight" || fitnessGoal === "weight_loss")
+    if (selectedGoal === "Lose Weight" || selectedGoal === "weight_loss")
       tdee -= 500;
-    else if (fitnessGoal === "Gain Weight" || fitnessGoal === "muscle_gain")
+    else if (selectedGoal === "Gain Weight" || selectedGoal === "muscle_gain")
       tdee += 400;
 
-    const dailyCalorieTarget = Math.max(1200, Math.round(tdee));
+    const dailyCalorieTarget = Math.max(
+      1200,
+      Number(providedCalorieTarget) ||
+        Number(providedDailyCalories) ||
+        Math.round(tdee),
+    );
 
-    // 6. Macros Allocation
     const macrosTarget = {
-      protein: Math.round((dailyCalorieTarget * 0.25) / 4),
-      carbs: Math.round((dailyCalorieTarget * 0.45) / 4),
-      fats: Math.round((dailyCalorieTarget * 0.3) / 9),
+      protein:
+        Number(proteinTarget) || Math.round((dailyCalorieTarget * 0.3) / 4),
+      carbs: Number(carbsTarget) || Math.round((dailyCalorieTarget * 0.4) / 4),
+      fats: Number(fatsTarget) || Math.round((dailyCalorieTarget * 0.3) / 9),
     };
 
-    // Update User Document
+    if (typeof name === "string" && name.trim()) user.name = name.trim();
     user.language = language || user.language || "English";
     user.gender = gender || user.gender;
     if (dob) user.dob = dob;
     user.age = age;
-    user.height = heightVal;
-    user.weight = weightVal;
+    user.height = heightInCm;
+    user.weight = weightInKg;
+    user.targetWeight =
+      (typeof targetWeight === "object" ? targetWeight?.value : targetWeight) ??
+      user.targetWeight;
     user.bmi = bmi;
     user.bmiCategory = bmiCategory;
-    user.goal = fitnessGoal || user.goal;
+    user.goal = selectedGoal || user.goal;
+    user.fitnessGoal = selectedGoal || user.fitnessGoal;
     user.activityLevel = activityLevel || user.activityLevel;
+    user.medicalCondition = medicalCondition || user.medicalCondition || "None";
     user.preferredMealsCount =
       preferredMealsCount || user.preferredMealsCount || 4;
     user.dailyCalories = dailyCalorieTarget;
     user.dailyCalorieGoal = dailyCalorieTarget;
+    user.dailyCalorieTarget = dailyCalorieTarget;
     user.macros = macrosTarget;
     user.isOnboarded = true;
     user.isOnboardingCompleted = true;
