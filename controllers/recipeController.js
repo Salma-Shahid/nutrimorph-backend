@@ -1,24 +1,9 @@
 const SavedMeal = require("../models/SavedMeal");
 const Meal = require("../models/Meal");
 const User = require("../models/User");
+const { updateStreak } = require("../utils/streak");
 
 // Helper function for user streak
-const calculateUserStreak = (lastLoggedDate, currentStreak) => {
-  const today = new Date().toLocaleDateString("en-CA");
-  if (!lastLoggedDate) return { streak: 1, lastLoggedDate: today };
-  if (lastLoggedDate === today)
-    return { streak: currentStreak || 1, lastLoggedDate: today };
-
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toLocaleDateString("en-CA");
-
-  if (lastLoggedDate === yesterdayStr) {
-    return { streak: (currentStreak || 0) + 1, lastLoggedDate: today };
-  }
-  return { streak: 1, lastLoggedDate: today };
-};
-
 // 1. Get Recipes by Category or All
 const getCategorizedRecipes = async (req, res) => {
   try {
@@ -77,9 +62,10 @@ const addRecipeToDiary = async (req, res) => {
     let updatedStreak = 1;
     const dbUser = await User.findById(userId);
     if (dbUser) {
-      const streakResult = calculateUserStreak(
+      const streakResult = updateStreak(
         dbUser.lastLoggedDate,
         dbUser.streakCount,
+        targetDate,
       );
       dbUser.streakCount = streakResult.streak;
       dbUser.lastLoggedDate = streakResult.lastLoggedDate;

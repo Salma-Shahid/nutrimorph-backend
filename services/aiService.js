@@ -23,6 +23,8 @@ class AIService {
 
       const prompt = `
         Analyze this food image and estimate the nutritional information.
+        Write the food name and all text in professional Standard English.
+        Do not use Urdu, Roman Urdu, or mixed-language phrases.
         Return ONLY a raw JSON object with no markdown syntax in this exact format:
         {
           "name": "Food item name",
@@ -61,21 +63,24 @@ class AIService {
     }
   }
 
-  //  New dynamic recovery guidance method to avoid repeating static answers
+  // Return supportive, non-punitive recovery guidance in English.
   async generateRecoveryGuidance(deviationAmount, latestMealType) {
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey)
-      return "Keep your next meal light with leafy greens and lean protein.";
+    const overage = Math.max(0, Math.floor(Number(deviationAmount) || 0));
+    const fallback =
+      overage > 0
+        ? `You have exceeded your calorie goal by ${overage} kcal. Do not skip meals or overexercise to compensate. Return to your usual balanced routine tomorrow.`
+        : "You are within your calorie goal. Continue with balanced meals and consistent tracking.";
+    if (!apiKey) return fallback;
 
     try {
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({
         model: GEMINI_MODEL,
-        generationConfig: { temperature: 0.85 }, // High temperature for maximum variety
+        generationConfig: { temperature: 0.2 },
       });
 
-      const prompt = `The user has a calorie deviation of ${deviationAmount} kcal and their recent meal category was ${latestMealType}. 
-      Give a fresh, unique, and encouraging 2-sentence natural health rescue tip in English. Never use the exact same phrasing twice; vary the suggestion creatively.`;
+      const prompt = `Write one supportive, professional Standard English response. The user exceeded their daily calorie goal by ${overage} kcal. Their most recent meal category was ${latestMealType || "unspecified"}. State the overage clearly, discourage meal skipping or compensatory exercise, and encourage returning to their usual balanced routine tomorrow. Do not use Urdu or Roman Urdu.`;
 
       const result = await callGeminiWithRetry(async () => {
         return await model.generateContent(prompt);
@@ -83,8 +88,8 @@ class AIService {
 
       return result.response.text().trim();
     } catch (err) {
-      console.log("Recovery guidance AI fallback used:", err.message);
-      return "Balance your upcoming meals with high-fiber veggies and plenty of water to stay on track.";
+      console.error("Recovery guidance generation failed:", err.message);
+      return fallback;
     }
   }
 }

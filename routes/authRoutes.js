@@ -4,6 +4,8 @@ const {
   register,
   verifyEmail,
   login,
+  requestPasswordReset,
+  resetPassword,
   getMe,
   updateProfile,
   completeOnboarding, //  Import Onboarding Controller
@@ -14,6 +16,8 @@ const { protect } = require("../middlewares/authMiddleware");
 router.post("/register", register);
 router.get("/verify-email", verifyEmail);
 router.post("/login", login);
+router.post("/forgot-password", requestPasswordReset);
+router.post("/reset-password", resetPassword);
 router.get("/me", protect, getMe);
 router.put("/profile", protect, updateProfile);
 

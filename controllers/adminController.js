@@ -4,12 +4,16 @@ const Exercise = require("../models/ExerciseModel");
 const Review = require("../models/Review");
 const ActivityLog = require("../models/ActivityLog");
 const sendEmail = require("../utils/sendEmail"); //  Import email utility
+const isProUser = require("../utils/isProUser");
 
 // 1. Get Platform Stats & Metrics
 const getAdminStats = async (req, res, next) => {
   try {
     const totalUsers = await User.countDocuments();
-    const proUsers = await User.countDocuments({ subscriptionTier: "pro" });
+    const users = await User.find().select(
+      "role subscriptionTier isPro subscriptionExpiresAt",
+    );
+    const proUsers = users.filter(isProUser).length;
     const totalMeals = await Meal.countDocuments();
     const totalExercises = await Exercise.countDocuments();
 
@@ -123,9 +127,10 @@ const deleteUser = async (req, res, next) => {
 // 5. Get Revenue Statistics
 const getRevenueStats = async (req, res) => {
   try {
-    const proUsersCount = await User.countDocuments({
-      subscriptionTier: "pro",
-    });
+    const users = await User.find().select(
+      "role subscriptionTier isPro subscriptionExpiresAt",
+    );
+    const proUsersCount = users.filter(isProUser).length;
     const estimatedRevenue = proUsersCount * 9.99; // $9.99 per pro user
 
     res.status(200).json({

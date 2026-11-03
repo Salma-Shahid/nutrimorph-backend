@@ -17,6 +17,8 @@ const userSchema = new mongoose.Schema(
     isVerified: { type: Boolean, default: false },
     verificationToken: { type: String },
     verificationTokenExpires: { type: Date },
+    passwordResetToken: { type: String, select: false },
+    passwordResetTokenExpires: { type: Date, select: false },
 
     //  Subscription Fields
     subscriptionTier: {

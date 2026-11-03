@@ -4,6 +4,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const connectDB = require("../config/db");
 const { callGeminiWithRetry } = require("../utils/aiHelper");
 const { GEMINI_MODEL } = require("../config/ai");
+const mongoose = require("mongoose");
 
 // Initialize Google Generative AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -99,7 +100,7 @@ const handleChat = async (req, res) => {
     const geminiModel = genAI.getGenerativeModel({
       model: GEMINI_MODEL,
       systemInstruction: `You are NutriBot, an expert AI nutritionist and fitness coach for the NutriMorph application.
-Communicate warmly and professionally in English.
+Communicate warmly and professionally in Standard English only. Never respond in Urdu, Roman Urdu, or mixed-language text, even if the user requests it.
 
 GROUND TRUTH USER PROFILE CONTEXT:
 ${userProfileContext}
@@ -180,13 +181,47 @@ const getChatHistory = async (req, res) => {
       return res.status(401).json({ message: "User not authenticated." });
     }
 
-    //  Strict query isolation by user ID
-    const history = await ChatMessage.find({ user: userId }).sort({
-      createdAt: 1,
-      _id: 1,
-    });
+    const limit = Math.min(
+      50,
+      Math.max(1, Math.floor(Number(req.query.limit) || 30)),
+    );
+    const filter = { user: userId };
+    if (req.query.before) {
+      const cursorId = String(req.query.before);
+      if (!mongoose.Types.ObjectId.isValid(cursorId)) {
+        return res.status(400).json({
+          success: false,
+          message: "The chat history cursor is invalid.",
+        });
+      }
+      const cursor = await ChatMessage.findOne({
+        _id: cursorId,
+        user: userId,
+      }).select("createdAt");
+      if (!cursor) {
+        return res.status(400).json({
+          success: false,
+          message: "The chat history cursor is no longer available.",
+        });
+      }
+      filter.$or = [
+        { createdAt: { $lt: cursor.createdAt } },
+        { createdAt: cursor.createdAt, _id: { $lt: cursor._id } },
+      ];
+    }
 
-    return res.status(200).json({ history: history || [] });
+    const page = await ChatMessage.find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit + 1);
+    const hasMore = page.length > limit;
+    const history = page.slice(0, limit).reverse();
+
+    return res.status(200).json({
+      success: true,
+      history,
+      hasMore,
+      nextCursor: hasMore ? history[0]?._id : null,
+    });
   } catch (error) {
     console.error("Error fetching chat history:", error.message);
     return res.status(500).json({

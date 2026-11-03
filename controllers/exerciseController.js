@@ -1,11 +1,18 @@
 const Exercise = require("../models/ExerciseModel");
 const User = require("../models/User");
 const AppError = require("../utils/appError");
+const { updateStreak } = require("../utils/streak");
 
 //  Get Daily Exercise & Steps Summary (Strict Per-User Isolation)
 const getExerciseData = async (req, res, next) => {
   try {
     const { date } = req.query;
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        message: "A date in YYYY-MM-DD format is required.",
+      });
+    }
     const userId = req.user._id;
 
     // Strict Query Isolation by User ID
@@ -26,7 +33,14 @@ const getExerciseData = async (req, res, next) => {
 //  Log Exercise or Update Steps with Accurate Streak & Badges Evaluator
 const logExerciseOrSteps = async (req, res, next) => {
   try {
-    const { date, steps, stepsTotal, caloriesBurned, exerciseName } = req.body;
+    const {
+      date,
+      steps,
+      stepsTotal,
+      stepsDelta,
+      caloriesBurned,
+      exerciseName,
+    } = req.body;
     const userId = req.user._id;
     const logDate = date || new Date().toISOString().split("T")[0];
 
@@ -37,6 +51,97 @@ const logExerciseOrSteps = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: "stepsTotal must be a non-negative number.",
+      });
+    }
+    if (
+      steps !== undefined &&
+      (!Number.isFinite(Number(steps)) || !Number.isInteger(Number(steps)) || Number(steps) < 0)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "steps must be a non-negative integer.",
+      });
+    }
+    if (
+      stepsDelta !== undefined &&
+      (!Number.isInteger(Number(stepsDelta)) ||
+        Math.abs(Number(stepsDelta)) > 100000)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "stepsDelta must be an integer between -100000 and 100000.",
+      });
+    }
+
+    if (stepsDelta !== undefined) {
+      const delta = Number(stepsDelta);
+      const query = { user: userId, date: logDate };
+      const previousRecord = await Exercise.findOne(query);
+      const previousDailySteps = Number(previousRecord?.steps) || 0;
+      const record = await Exercise.findOneAndUpdate(
+        query,
+        [
+          {
+            $set: {
+              steps: {
+                $max: [0, { $add: [{ $ifNull: ["$steps", 0] }, delta] }],
+              },
+              user: userId,
+              date: logDate,
+              caloriesBurned: { $ifNull: ["$caloriesBurned", 0] },
+              exerciseName: { $ifNull: ["$exerciseName", ""] },
+            },
+          },
+        ],
+        { upsert: true, new: true },
+      );
+      const actualDelta = Number(record.steps) - previousDailySteps;
+      const user = await User.findById(userId);
+      if (user) {
+        user.steps = Math.max(0, (Number(user.steps) || 0) + actualDelta);
+        const streak = updateStreak(
+          user.lastLoggedDate,
+          user.streakCount,
+          logDate,
+        );
+        user.streakCount = streak.streak;
+        user.lastLoggedDate = streak.lastLoggedDate;
+
+        const existingBadges = new Set(
+          (user.unlockedBadges || []).map((badge) =>
+            String(badge.badgeId || badge.id || badge).replace(
+              /^steps_/,
+              "step_",
+            ),
+          ),
+        );
+        for (const [count, badgeId] of [
+          [5000, "step_5k"],
+          [10000, "step_10k"],
+          [15000, "step_15k"],
+          [20000, "step_20k"],
+          [25000, "step_25k"],
+          [30000, "step_30k"],
+        ]) {
+          if (record.steps >= count && !existingBadges.has(badgeId)) {
+            user.unlockedBadges.push({ badgeId });
+            existingBadges.add(badgeId);
+          }
+        }
+        await user.save();
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: record,
+        userStats: user
+          ? {
+              steps: user.steps,
+              dailySteps: record.steps,
+              streakCount: user.streakCount,
+              unlockedBadges: user.unlockedBadges,
+            }
+          : null,
       });
     }
 
@@ -81,25 +186,13 @@ const logExerciseOrSteps = async (req, res, next) => {
       }
 
       //  Robust Streak Management Logic
-      const todayStr = logDate;
-      const lastDate = user.lastLoggedDate;
-
-      if (!lastDate) {
-        user.streakCount = 1;
-        user.lastLoggedDate = todayStr;
-      } else if (lastDate !== todayStr) {
-        const last = new Date(lastDate);
-        const curr = new Date(todayStr);
-        const diffDays = Math.round((curr - last) / (1000 * 60 * 60 * 24));
-
-        if (diffDays === 1) {
-          user.streakCount = (user.streakCount || 0) + 1;
-          user.lastLoggedDate = todayStr;
-        } else if (diffDays > 1) {
-          user.streakCount = 1;
-          user.lastLoggedDate = todayStr;
-        }
-      }
+      const streak = updateStreak(
+        user.lastLoggedDate,
+        user.streakCount,
+        logDate,
+      );
+      user.streakCount = streak.streak;
+      user.lastLoggedDate = streak.lastLoggedDate;
 
       //  Badge Auto-Unlock Evaluation Logic (Checking Daily Record Steps & User Stats)
       if (!user.unlockedBadges) user.unlockedBadges = [];

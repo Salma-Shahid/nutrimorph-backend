@@ -23,10 +23,14 @@ router.post("/create-checkout-session", protect, async (req, res) => {
     const unitAmount = isYearly ? 9900 : 999; // $99/yr or $9.99/mo
     const interval = isYearly ? "year" : "month";
 
-    const serverUrl =
-      process.env.SERVER_URL ||
-      `${req.protocol}://${req.get("host")}` ||
-      "https://api.nutrimorph.app";
+    const appUrl = (
+      process.env.FRONTEND_URL ||
+      process.env.CLIENT_URL ||
+      "https://nutrimorph.app"
+    ).replace(/\/$/, "");
+    const serverUrl = (
+      process.env.SERVER_URL || `${req.protocol}://${req.get("host")}`
+    ).replace(/\/$/, "");
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -36,8 +40,9 @@ router.post("/create-checkout-session", protect, async (req, res) => {
           price_data: {
             currency: "usd",
             product_data: {
-              name: `NutriMorph Pro Nutritionist (${isYearly ? "Yearly" : "Monthly"})`,
+              name: `NutriMorph App Pro (${isYearly ? "Yearly" : "Monthly"})`,
               description: "Unlimited AI Chat, Camera Scanner & Analytics",
+              metadata: { brand: "NutriMorph App" },
             },
             unit_amount: unitAmount,
             recurring: { interval: interval },
@@ -45,8 +50,16 @@ router.post("/create-checkout-session", protect, async (req, res) => {
           quantity: 1,
         },
       ],
-      customer_email: req.user.email,
-      success_url: `${serverUrl}/api/payment/success?userId=${req.user._id}&billing=${billingCycle}`,
+      client_reference_id: String(req.user._id),
+      metadata: {
+        userId: String(req.user._id),
+        billingCycle: isYearly ? "yearly" : "monthly",
+        brand: "NutriMorph App",
+      },
+      subscription_data: {
+        metadata: { userId: String(req.user._id), brand: "NutriMorph App" },
+      },
+      success_url: `${serverUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${serverUrl}/api/payment/cancel`,
     });
 
@@ -59,21 +72,40 @@ router.post("/create-checkout-session", protect, async (req, res) => {
 // 2. Success Redirect (MongoDB Auto Update & Redirect to Web App)
 router.get("/success", async (req, res) => {
   try {
-    const { userId, billing } = req.query;
-
-    if (userId) {
-      const days = billing === "yearly" ? 365 : 30;
-      await User.findByIdAndUpdate(userId, {
-        subscriptionTier: "pro",
-        isPro: true,
-        subscriptionExpiresAt: new Date(
-          Date.now() + days * 24 * 60 * 60 * 1000,
-        ),
-      });
+    const { session_id: sessionId } = req.query;
+    if (!sessionId) {
+      return res.status(400).send("Checkout session is missing.");
     }
-
-    //  Redirect back to web application plans page with success query flag
-    res.redirect("https://nutrimorph-web.vercel.app/plans?payment=success");
+    const session = await stripe.checkout.sessions.retrieve(String(sessionId), {
+      expand: ["subscription"],
+    });
+    const userId =
+      session.client_reference_id || session.metadata?.userId;
+    const subscriptionStatus = session.subscription?.status;
+    if (
+      session.mode !== "subscription" ||
+      session.payment_status !== "paid" ||
+      !userId ||
+      !["active", "trialing"].includes(subscriptionStatus)
+    ) {
+      return res.redirect(
+        `${(process.env.FRONTEND_URL || process.env.CLIENT_URL || "https://nutrimorph.app").replace(/\/$/, "")}/?payment=failed`,
+      );
+    }
+    const user = await User.findByIdAndUpdate(userId, {
+      subscriptionTier: "pro",
+      isPro: true,
+      subscriptionExpiresAt: new Date(
+        session.subscription.current_period_end * 1000,
+      ),
+    });
+    if (!user) return res.status(404).send("Account not found.");
+    const appUrl = (
+      process.env.FRONTEND_URL ||
+      process.env.CLIENT_URL ||
+      "https://nutrimorph.app"
+    ).replace(/\/$/, "");
+    res.redirect(`${appUrl}/?payment=success`);
   } catch (error) {
     res.status(500).send("Database Update Failed");
   }
@@ -81,12 +113,12 @@ router.get("/success", async (req, res) => {
 
 // 3. Cancel Route
 router.get("/cancel", (req, res) => {
-  res.send(`
-    <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; height: 100vh;">
-      <h1 style="color: #ef4444;"> Payment Cancelled</h1>
-      <p style="font-size: 18px; color: #cbd5e1;">Your payment was cancelled.</p>
-    </div>
-  `);
+  const appUrl = (
+    process.env.FRONTEND_URL ||
+    process.env.CLIENT_URL ||
+    "https://nutrimorph.app"
+  ).replace(/\/$/, "");
+  res.redirect(`${appUrl}/?payment=cancelled`);
 });
 
 // 4. Direct Verify Route

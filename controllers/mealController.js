@@ -5,41 +5,18 @@ const AppError = require("../utils/appError");
 const mongoose = require("mongoose");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { GEMINI_MODEL } = require("../config/ai");
+const { updateStreak } = require("../utils/streak");
+const isProUser = require("../utils/isProUser");
 
 // Helper function to calculate streak
-const calculateUserStreak = (lastLoggedDate, currentStreak) => {
-  const today = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD
-  if (!lastLoggedDate) {
-    return { streak: 1, lastLoggedDate: today };
-  }
-
-  if (lastLoggedDate === today) {
-    return { streak: currentStreak || 1, lastLoggedDate: today };
-  }
-
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toLocaleDateString("en-CA");
-
-  if (lastLoggedDate === yesterdayStr) {
-    return { streak: (currentStreak || 0) + 1, lastLoggedDate: today };
-  }
-
-  // Broken streak
-  return { streak: 1, lastLoggedDate: today };
-};
-
 // 1. AI Text Analysis
 const analyzeMealText = async (req, res) => {
   try {
-    if (
-      req.user?.subscriptionTier !== "pro" &&
-      process.env.NODE_ENV === "production"
-    ) {
+    if (!isProUser(req.user)) {
       return res.status(403).json({
         success: false,
-        message:
-          "This feature is only available for Pro Users. Please upgrade to access it.",
+        code: "PRO_REQUIRED",
+        message: "This feature requires a Pro plan. Upgrade to continue.",
       });
     }
 
@@ -64,6 +41,7 @@ const analyzeMealText = async (req, res) => {
     });
 
     const prompt = `You are a nutrition assistant. Calculate standard serving values for: "${text}".
+Return the food name and all text in professional Standard English only. Do not use Urdu or Roman Urdu.
 Return ONLY a single valid JSON object with numbers for calories, protein, carbs, and fats. No markdown code blocks, no explanation text.
 JSON Schema:
 {
@@ -102,14 +80,11 @@ JSON Schema:
 const analyzeMealImage = async (req, res, next) => {
   console.log(" AI Scan request received at backend!");
   try {
-    if (
-      req.user?.subscriptionTier !== "pro" &&
-      process.env.NODE_ENV === "production"
-    ) {
+    if (!isProUser(req.user)) {
       return res.status(403).json({
         success: false,
-        message:
-          "This feature is only available for Pro Users. Please upgrade to access it.",
+        code: "PRO_REQUIRED",
+        message: "This feature requires a Pro plan. Upgrade to continue.",
       });
     }
 
@@ -151,14 +126,17 @@ const getDailySummary = async (req, res) => {
       endOfDay = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
     }
 
-    const meals = await Meal.find({
-      $or: [{ userId: userId }, { user: userId }],
+    const ownerFilter = { $or: [{ userId }, { user: userId }] };
+    const dateFilter = {
       $or: [
         { date: targetDate },
         ...(startOfDay
           ? [{ createdAt: { $gte: startOfDay, $lte: endOfDay } }]
           : []),
       ],
+    };
+    const meals = await Meal.find({
+      $and: [ownerFilter, dateFilter],
     }).sort({ createdAt: -1 });
 
     const summary = meals.reduce(
@@ -297,9 +275,10 @@ const logMeal = async (req, res, next) => {
 
     const dbUser = await User.findById(userId);
     if (dbUser) {
-      const streakResult = calculateUserStreak(
+      const streakResult = updateStreak(
         dbUser.lastLoggedDate,
         dbUser.streakCount,
+        userLocalDate,
       );
 
       dbUser.streakCount = streakResult.streak;
@@ -343,7 +322,7 @@ const deleteMeal = async (req, res) => {
     const { id } = req.params;
     const userId = req.user._id || req.user.id;
 
-    const meal = await Meal.findOne({
+    const meal = await Meal.findOneAndDelete({
       _id: id,
       $or: [{ userId: userId }, { user: userId }],
     });
@@ -354,8 +333,6 @@ const deleteMeal = async (req, res) => {
         message: "Meal not found or unauthorized to delete",
       });
     }
-
-    await Meal.findByIdAndDelete(id);
 
     return res.status(200).json({
       success: true,
@@ -375,9 +352,10 @@ const updateMeal = async (req, res) => {
     const { id } = req.params;
     const userId = req.user._id || req.user.id;
 
+    const { userId: _userId, user: _user, ...safeUpdates } = req.body;
     const updatedMeal = await Meal.findOneAndUpdate(
       { _id: id, $or: [{ userId: userId }, { user: userId }] },
-      req.body,
+      safeUpdates,
       {
         new: true,
         runValidators: true,
@@ -403,11 +381,27 @@ const updateMeal = async (req, res) => {
 // 8. Get AI Recovery Guidance
 const getRecoveryGuidance = async (req, res, next) => {
   try {
-    const { deviationAmount, latestMealType } = req.query;
-    const guidance = await aiService.generateRecoveryGuidance(
-      deviationAmount || 0,
-      latestMealType || "Snack",
+    const payload = req.method === "GET" ? req.query : req.body;
+    const targetCalories = Number(
+      req.user?.dailyCalorieTarget ||
+        req.user?.dailyCalorieGoal ||
+        req.user?.dailyCalories ||
+        2000,
     );
+    const consumedCalories = Number(payload.consumedCalories);
+    const requested = Math.max(
+      0,
+      Math.floor(
+        Number(payload.deviationAmount) ||
+          (Number.isFinite(consumedCalories)
+            ? consumedCalories - targetCalories
+            : 0),
+      ),
+    );
+    const guidance =
+      requested > 0
+        ? `You have exceeded your daily calorie goal by ${requested} kcal. There is no need to compensate by skipping meals. Return to your usual balanced routine tomorrow, and consider discussing nutrition concerns with a qualified professional.`
+        : "You are within your daily calorie goal. Continue with balanced meals and consistent tracking.";
 
     return res.status(200).json({
       success: true,

@@ -1,10 +1,21 @@
-const AppError = require("../utils/appError");
+const User = require("../models/User");
 
-const requireAdmin = (req, res, next) => {
-  if (req.user && req.user.role === "admin") {
-    return next();
+const requireAdmin = async (req, res, next) => {
+  try {
+    const user = req.user?._id
+      ? await User.findById(req.user._id).select("role")
+      : null;
+    if (user?.role === "admin") {
+      req.user.role = user.role;
+      return next();
+    }
+    return res.status(403).json({
+      success: false,
+      message: "Access denied. Admin privileges are required.",
+    });
+  } catch (error) {
+    return next(error);
   }
-  return next(new AppError("Access denied. Admin privileges required.", 403));
 };
 
 module.exports = requireAdmin;

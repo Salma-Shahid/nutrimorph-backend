@@ -4,6 +4,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { z } = require("zod");
 const { callGeminiWithRetry } = require("../utils/aiHelper"); //  Retry Helper Import
 const { GEMINI_MODEL } = require("../config/ai");
+const isProUser = require("../utils/isProUser");
 
 // 1. Zod Schema Definitions for AI Meal Plan Output Validation
 const MealItemSchema = z.object({
@@ -46,14 +47,11 @@ const generateMealPlan = async (req, res) => {
       });
     }
 
-    const currentTier = (user.subscriptionTier || "free").toLowerCase();
-
-    // Pro Subscription Guard Check
-    if (currentTier !== "pro" && process.env.NODE_ENV === "production") {
+    if (!isProUser(user)) {
       return res.status(403).json({
         success: false,
-        message:
-          "AI Meal Planner is a Pro feature. Please upgrade your plan to access custom meal generation.",
+        code: "PRO_REQUIRED",
+        message: "Custom AI meal planning requires a Pro plan. Upgrade to continue.",
       });
     }
 
@@ -79,6 +77,7 @@ const generateMealPlan = async (req, res) => {
 - Plan Duration: Exactly ${duration} days
 
 Return ONLY a single valid JSON object with no markdown code blocks, no explanation text.
+Write every title, ingredient, and instruction in professional Standard English. Do not use Urdu, Roman Urdu, or mixed-language phrases. Keep culturally specific dish names that are proper nouns, but describe their ingredients and preparation in English.
 Ensure the "days" array contains exactly ${duration} day objects (labeled "Day 1", "Day 2", up to "Day ${duration}").
 
 JSON Schema:

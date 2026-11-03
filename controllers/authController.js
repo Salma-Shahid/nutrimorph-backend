@@ -10,6 +10,19 @@ const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
 };
 
+const getSubscriptionStatus = (user) => {
+  const isExpired =
+    user.subscriptionExpiresAt &&
+    new Date(user.subscriptionExpiresAt).getTime() <= Date.now();
+  const isPro =
+    user.role === "admin" ||
+    (!isExpired && (user.subscriptionTier === "pro" || user.isPro === true));
+  return {
+    subscriptionTier: isPro ? "pro" : "free",
+    isPro,
+  };
+};
+
 // @desc Register new user & send/resend verification email
 // @route POST /api/auth/register
 // @access Public
@@ -187,10 +200,11 @@ const login = async (req, res) => {
       name: user.name,
       email: user.email,
       isOnboarded: user.isOnboarded || user.isOnboardingCompleted || false,
+      role: user.role || "user",
       dailyCalories: user.dailyCalories || 2000,
       dailyCalorieGoal: user.dailyCalorieGoal || user.dailyCalories || 2000,
-      subscriptionTier: user.subscriptionTier || "free",
-      isPro: user.isPro || false,
+      ...getSubscriptionStatus(user),
+      subscriptionExpiresAt: user.subscriptionExpiresAt,
       avatar: user.avatar || user.profileImage || null,
       macros: user.macros || user.macrosTarget,
       weight: user.weight,
@@ -210,6 +224,97 @@ const login = async (req, res) => {
   }
 };
 
+const requestPasswordReset = async (req, res) => {
+  const genericResponse = {
+    success: true,
+    message:
+      "If an account exists for that email address, a password reset link will be sent.",
+  };
+  try {
+    await connectDB();
+    const email = String(req.body.email || "")
+      .trim()
+      .toLowerCase();
+    if (!email) return res.status(200).json(genericResponse);
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(200).json(genericResponse);
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    user.passwordResetToken = crypto
+      .createHash("sha256")
+      .update(rawToken)
+      .digest("hex");
+    user.passwordResetTokenExpires = new Date(Date.now() + 30 * 60 * 1000);
+    await user.save();
+
+    const appUrl = (
+      process.env.FRONTEND_URL ||
+      process.env.CLIENT_URL ||
+      "https://nutrimorph.app"
+    ).replace(/\/$/, "");
+    const resetUrl = `${appUrl}/reset-password?token=${rawToken}&email=${encodeURIComponent(email)}`;
+    await sendEmail({
+      email,
+      subject: "Reset your NutriMorph password",
+      html: `<div style="font-family:Arial,sans-serif;color:#111827"><h2>Reset your NutriMorph password</h2><p>Use the secure link below within 30 minutes to choose a new password.</p><p><a href="${resetUrl}">Reset password</a></p><p>If you did not request this change, you can ignore this message.</p></div>`,
+    });
+    return res.status(200).json(genericResponse);
+  } catch (error) {
+    console.error("Password reset request failed:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Could not send a password reset email. Please try again later.",
+    });
+  }
+};
+
+const resetPassword = async (req, res) => {
+  try {
+    await connectDB();
+    const email = String(req.body.email || "")
+      .trim()
+      .toLowerCase();
+    const token = String(req.body.token || "");
+    const password = String(req.body.password || "");
+    if (!email || !token || password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Email, reset token, and a password of at least 8 characters are required.",
+      });
+    }
+
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+    const user = await User.findOne({
+      email,
+      passwordResetToken: hashedToken,
+      passwordResetTokenExpires: { $gt: new Date() },
+    }).select("+passwordResetToken +passwordResetTokenExpires");
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "The password reset link is invalid or has expired.",
+      });
+    }
+
+    user.password = await bcrypt.hash(password, await bcrypt.genSalt(10));
+    user.passwordResetToken = undefined;
+    user.passwordResetTokenExpires = undefined;
+    await user.save();
+    return res.status(200).json({
+      success: true,
+      message: "Password updated. You can now sign in with your new password.",
+    });
+  } catch (error) {
+    console.error("Password reset failed:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Could not reset the password. Please try again.",
+    });
+  }
+};
+
 // @desc Get logged in user profile
 // @route GET /api/auth/me & /api/auth/profile
 // @access Private
@@ -220,14 +325,23 @@ const getMe = async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
+    const subscription = getSubscriptionStatus(user);
+    if (
+      user.subscriptionTier !== subscription.subscriptionTier ||
+      user.isPro !== subscription.isPro
+    ) {
+      user.subscriptionTier = subscription.subscriptionTier;
+      user.isPro = subscription.isPro;
+      await user.save();
+    }
     res.status(200).json({
       success: true,
       user: {
         _id: user._id,
         name: user.name,
         email: user.email,
-        subscriptionTier: user.subscriptionTier,
-        isPro: user.isPro,
+        ...subscription,
+        role: user.role || "user",
         subscriptionExpiresAt: user.subscriptionExpiresAt,
         dailyCalories: user.dailyCalories || user.dailyCalorieGoal || 2000,
         dailyCalorieGoal: user.dailyCalorieGoal || user.dailyCalorieTarget,
@@ -246,6 +360,7 @@ const getMe = async (req, res) => {
         medicalCondition: user.medicalCondition,
         unlockedBadges: user.unlockedBadges || [],
         steps: user.steps || 0,
+        lastLoggedDate: user.lastLoggedDate || null,
         streakCount: user.streakCount || 0,
         isOnboarded: user.isOnboarded || user.isOnboardingCompleted,
         preferredMealsCount: user.preferredMealsCount || 4,
@@ -280,22 +395,12 @@ const updateProfile = async (req, res) => {
       goal,
       calorieTarget,
       dailyCalorieGoal,
-      subscriptionTier,
-      isPro,
     } = req.body;
 
     if (name) user.name = name;
     if (email) user.email = email;
     if (profileImage !== undefined) user.profileImage = profileImage;
     if (avatar !== undefined) user.avatar = avatar;
-
-    if (subscriptionTier !== undefined) {
-      user.subscriptionTier = subscriptionTier;
-      user.isPro = subscriptionTier === "pro";
-    }
-    if (isPro !== undefined) {
-      user.isPro = isPro;
-    }
 
     const numAge = age !== undefined ? Number(age) : user.age;
     const numWeight = weight !== undefined ? Number(weight) : user.weight;
@@ -553,6 +658,8 @@ module.exports = {
   register,
   verifyEmail,
   login,
+  requestPasswordReset,
+  resetPassword,
   getMe,
   updateProfile,
   completeOnboarding, //  Added Onboarding Handler
