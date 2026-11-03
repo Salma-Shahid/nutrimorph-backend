@@ -1,4 +1,4 @@
-const Review = require("../models/Review"); // Aapka MongoDB Review Model
+const Review = require("../models/Review"); // MongoDB review model.
 
 const fetchAndSavePlayStoreReviews = async (req, res) => {
   try {
@@ -6,7 +6,7 @@ const fetchAndSavePlayStoreReviews = async (req, res) => {
     const gplay = await import("google-play-scraper");
 
     const reviewsData = await gplay.default.reviews({
-      appId: "com.nutrimorph.app", // Aapki app ka Play Store package name
+      appId: "com.nutrimorph.app", // The app's Play Store package name.
       sort: gplay.default.sort.NEWEST,
       num: 20,
     });
@@ -42,7 +42,7 @@ const fetchAndSavePlayStoreReviews = async (req, res) => {
   }
 };
 
-// 2. Database se Reviews Fetch Karne Ka Function
+// Fetch reviews from the database.
 const getReviews = async (req, res) => {
   try {
     const reviews = await Review.find().sort({ updatedAt: -1 });

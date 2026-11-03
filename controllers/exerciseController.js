@@ -2,7 +2,7 @@ const Exercise = require("../models/ExerciseModel");
 const User = require("../models/User");
 const AppError = require("../utils/appError");
 
-// 🟢 Get Daily Exercise & Steps Summary (Strict Per-User Isolation)
+//  Get Daily Exercise & Steps Summary (Strict Per-User Isolation)
 const getExerciseData = async (req, res, next) => {
   try {
     const { date } = req.query;
@@ -23,7 +23,7 @@ const getExerciseData = async (req, res, next) => {
   }
 };
 
-// 🟢 Log Exercise or Update Steps with Accurate Streak & Badges Evaluator
+//  Log Exercise or Update Steps with Accurate Streak & Badges Evaluator
 const logExerciseOrSteps = async (req, res, next) => {
   try {
     const { date, steps, stepsTotal, caloriesBurned, exerciseName } = req.body;
@@ -80,7 +80,7 @@ const logExerciseOrSteps = async (req, res, next) => {
         user.steps = (Number(user.steps) || 0) + Number(steps);
       }
 
-      // 🟢 Robust Streak Management Logic
+      //  Robust Streak Management Logic
       const todayStr = logDate;
       const lastDate = user.lastLoggedDate;
 
@@ -101,7 +101,7 @@ const logExerciseOrSteps = async (req, res, next) => {
         }
       }
 
-      // 🟢 Badge Auto-Unlock Evaluation Logic (Checking Daily Record Steps & User Stats)
+      //  Badge Auto-Unlock Evaluation Logic (Checking Daily Record Steps & User Stats)
       if (!user.unlockedBadges) user.unlockedBadges = [];
       const earnedBadgeIds = user.unlockedBadges.map((badge) => {
         const badgeId =

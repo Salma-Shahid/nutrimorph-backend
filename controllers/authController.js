@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
-const ChatMessage = require("../models/ChatMessage"); // 🟢 ChatMessage Model Import
+const ChatMessage = require("../models/ChatMessage"); //  ChatMessage Model Import
 const sendEmail = require("../utils/sendEmail");
 const connectDB = require("../config/db");
 
@@ -10,9 +10,9 @@ const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
 };
 
-// @desc    Register new user & send/resend verification email
-// @route   POST /api/auth/register
-// @access  Public
+// @desc Register new user & send/resend verification email
+// @route POST /api/auth/register
+// @access Public
 const register = async (req, res) => {
   try {
     await connectDB();
@@ -25,7 +25,7 @@ const register = async (req, res) => {
     const userExists = await User.findOne({ email });
 
     if (userExists) {
-      // 🟢 Case 1: Account exists but is NOT verified -> Resend Verification Email
+      //  Case 1: Account exists but is NOT verified -> Resend Verification Email
       if (!userExists.isVerified) {
         const salt = await bcrypt.genSalt(10);
         userExists.password = await bcrypt.hash(password, salt);
@@ -41,12 +41,12 @@ const register = async (req, res) => {
 
         const emailTemplate = `
           <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-            <h2>Welcome back to NutriMorph, ${userExists.name}! 🎉</h2>
+            <h2>Welcome back to NutriMorph, ${userExists.name}! </h2>
             <p>Please verify your email address to activate your account.</p>
             <a href="${verifyUrl}" style="background-color: #10B981; color: white; padding: 12px 20px; text-decoration: none; border-radius: 6px; display: inline-block; margin-top: 10px;">Verify Email Address</a>
             <p style="margin-top: 20px; color: #666; font-size: 12px;">This link will expire in 24 hours.</p>
           </div>
-        `;
+`;
 
         await sendEmail({
           email: userExists.email,
@@ -60,13 +60,13 @@ const register = async (req, res) => {
         });
       }
 
-      // 🔴 Case 2: Account exists AND is verified
+      //  Case 2: Account exists AND is verified
       return res.status(400).json({
         message: "User already exists and is verified. Please log in.",
       });
     }
 
-    // 🟢 Case 3: Completely New User Creation
+    //  Case 3: Completely New User Creation
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
@@ -87,12 +87,12 @@ const register = async (req, res) => {
 
     const emailTemplate = `
       <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-        <h2>Welcome to NutriMorph, ${name}! 🎉</h2>
+        <h2>Welcome to NutriMorph, ${name}! </h2>
         <p>Thank you for signing up. Please verify your email address to activate your account.</p>
         <a href="${verifyUrl}" style="background-color: #10B981; color: white; padding: 12px 20px; text-decoration: none; border-radius: 6px; display: inline-block; margin-top: 10px;">Verify Email Address</a>
         <p style="margin-top: 20px; color: #666; font-size: 12px;">This link will expire in 24 hours.</p>
       </div>
-    `;
+`;
 
     await sendEmail({
       email: user.email,
@@ -111,9 +111,9 @@ const register = async (req, res) => {
   }
 };
 
-// @desc    Verify User Email Token
-// @route   GET /api/auth/verify-email
-// @access  Public
+// @desc Verify User Email Token
+// @route GET /api/auth/verify-email
+// @access Public
 const verifyEmail = async (req, res) => {
   try {
     await connectDB();
@@ -145,19 +145,19 @@ const verifyEmail = async (req, res) => {
 
     res.send(`
       <div style="text-align: center; font-family: Arial, sans-serif; padding: 50px;">
-        <h1 style="color: #10B981;">Email Verified Successfully! 🎉</h1>
+        <h1 style="color: #10B981;">Email Verified Successfully! </h1>
         <p>Your account is active now. You can close this tab and log in to the app.</p>
       </div>
-    `);
+`);
   } catch (error) {
     console.error("Verify Email Error:", error);
     res.status(500).send("<h3>Server error during email verification.</h3>");
   }
 };
 
-// @desc    Authenticate user & get token
-// @route   POST /api/auth/login
-// @access  Public
+// @desc Authenticate user & get token
+// @route POST /api/auth/login
+// @access Public
 const login = async (req, res) => {
   try {
     await connectDB();
@@ -210,9 +210,9 @@ const login = async (req, res) => {
   }
 };
 
-// @desc    Get logged in user profile
-// @route   GET /api/auth/me & /api/auth/profile
-// @access  Private
+// @desc Get logged in user profile
+// @route GET /api/auth/me & /api/auth/profile
+// @access Private
 const getMe = async (req, res) => {
   try {
     await connectDB();
@@ -229,8 +229,24 @@ const getMe = async (req, res) => {
         subscriptionTier: user.subscriptionTier,
         isPro: user.isPro,
         subscriptionExpiresAt: user.subscriptionExpiresAt,
+        dailyCalories: user.dailyCalories || user.dailyCalorieGoal || 2000,
         dailyCalorieGoal: user.dailyCalorieGoal || user.dailyCalorieTarget,
+        dailyCalorieTarget:
+          user.dailyCalorieTarget ||
+          user.dailyCalorieGoal ||
+          user.dailyCalories,
         avatar: user.avatar,
+        profileImage: user.profileImage,
+        age: user.age,
+        gender: user.gender,
+        weight: user.weight,
+        height: user.height,
+        goal: user.goal,
+        fitnessGoal: user.fitnessGoal,
+        medicalCondition: user.medicalCondition,
+        unlockedBadges: user.unlockedBadges || [],
+        steps: user.steps || 0,
+        streakCount: user.streakCount || 0,
         isOnboarded: user.isOnboarded || user.isOnboardingCompleted,
         preferredMealsCount: user.preferredMealsCount || 4,
       },
@@ -240,9 +256,9 @@ const getMe = async (req, res) => {
   }
 };
 
-// @desc    Update Health & Personal Profile
-// @route   PUT /api/auth/profile
-// @access  Private
+// @desc Update Health & Personal Profile
+// @route PUT /api/auth/profile
+// @access Private
 const updateProfile = async (req, res) => {
   try {
     await connectDB();
@@ -333,9 +349,9 @@ const updateProfile = async (req, res) => {
   }
 };
 
-// @desc    Complete Onboarding Wizard Flow
-// @route   POST /api/auth/onboarding
-// @access  Private
+// @desc Complete Onboarding Wizard Flow
+// @route POST /api/auth/onboarding
+// @access Private
 const completeOnboarding = async (req, res) => {
   try {
     await connectDB();
@@ -407,9 +423,7 @@ const completeOnboarding = async (req, res) => {
 
     const bmi =
       Number(providedBmi) ||
-      parseFloat(
-        (weightInKg / (heightInMeters * heightInMeters)).toFixed(1),
-      );
+      parseFloat((weightInKg / (heightInMeters * heightInMeters)).toFixed(1));
     let bmiCategory = "Normal";
     if (bmi < 18.5) bmiCategory = "Underweight";
     else if (bmi >= 25 && bmi < 29.9) bmiCategory = "Overweight";
@@ -490,9 +504,9 @@ const completeOnboarding = async (req, res) => {
   }
 };
 
-// @desc    Delete User Account & Cascade Delete Associated Data
-// @route   DELETE /api/auth/me
-// @access  Private
+// @desc Delete User Account & Cascade Delete Associated Data
+// @route DELETE /api/auth/me
+// @access Private
 const deleteAccount = async (req, res) => {
   try {
     await connectDB();
@@ -541,6 +555,6 @@ module.exports = {
   login,
   getMe,
   updateProfile,
-  completeOnboarding, // 🟢 Added Onboarding Handler
+  completeOnboarding, //  Added Onboarding Handler
   deleteAccount,
 };

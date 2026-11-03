@@ -6,19 +6,19 @@ const userSchema = new mongoose.Schema(
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
 
-    // 👑 Role & Permissions (New for Admin Dashboard)
+    //  Role & Permissions (New for Admin Dashboard)
     role: {
       type: String,
       enum: ["user", "admin"],
       default: "user",
     },
 
-    // 📧 Email Verification Fields
+    //  Email Verification Fields
     isVerified: { type: Boolean, default: false },
     verificationToken: { type: String },
     verificationTokenExpires: { type: Date },
 
-    // 💳 Subscription Fields
+    //  Subscription Fields
     subscriptionTier: {
       type: String,
       enum: ["free", "pro"],
@@ -27,11 +27,11 @@ const userSchema = new mongoose.Schema(
     isPro: { type: Boolean, default: false },
     subscriptionExpiresAt: { type: Date },
 
-    // 🤖 Free Limits Tracking
+    //  Free Limits Tracking
     dailyChatCount: { type: Number, default: 0 },
     lastChatDate: { type: Date, default: Date.now },
 
-    // 🏋️ Profile & Health Metrics (Enhanced for Onboarding Wizard)
+    //  Profile & Health Metrics (Enhanced for Onboarding Wizard)
     isOnboarded: { type: Boolean, default: false },
     isOnboardingCompleted: { type: Boolean, default: false },
     language: { type: String, default: "English" },
@@ -59,7 +59,7 @@ const userSchema = new mongoose.Schema(
       fats: { type: Number },
     },
 
-    // 🔥 Gamification & Engagement (Streak & Badges)
+    //  Gamification & Engagement (Streak & Badges)
     steps: { type: Number, default: 0 },
     streakCount: { type: Number, default: 0 },
     lastLoggedDate: { type: String, default: null },

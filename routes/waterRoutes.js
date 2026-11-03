@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const Water = require("../models/Water");
-const User = require("../models/User"); // 🟢 User model imported for badge unlocking
+const User = require("../models/User"); //  User model imported for badge unlocking
 const { protect } = require("../middlewares/authMiddleware");
 
 // 1. GET Water Intake
@@ -34,7 +34,7 @@ router.post("/", protect, async (req, res) => {
       { upsert: true, returnDocument: "after" },
     );
 
-    // 2. 💧 Water Milestones Badge Checking Logic
+    // 2.  Water Milestones Badge Checking Logic
     let user = await User.findById(userId);
     let newlyUnlocked = [];
 
@@ -66,7 +66,7 @@ router.post("/", protect, async (req, res) => {
       });
 
       if (newlyUnlocked.length > 0) {
-        // Mongoose Schema Array Change Track ensure karne ke liye
+        // Mark the array as modified so Mongoose persists the changes.
         user.markModified("unlockedBadges");
         await user.save();
       }

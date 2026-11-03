@@ -23,7 +23,7 @@ const MealSchema = new mongoose.Schema(
     carbs: { type: Number, default: 0 },
     fats: { type: Number, default: 0 },
 
-    // 🟢 Standardized Meal Type Enum:
+    //  Standardized Meal Type Enum:
     mealType: {
       type: String,
       enum: ["Breakfast", "Lunch", "Dinner", "Snack", "Late-night"],

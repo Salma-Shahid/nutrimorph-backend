@@ -1,6 +1,7 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const AppError = require("../utils/appError");
 const { callGeminiWithRetry } = require("../utils/aiHelper");
+const { GEMINI_MODEL } = require("../config/ai");
 
 class AIService {
   async analyzeFoodImage(imageBase64) {
@@ -13,10 +14,9 @@ class AIService {
     try {
       const genAI = new GoogleGenerativeAI(apiKey);
 
-      // 🟢 Added temperature: 0.8 for creative and varied AI outputs
       const model = genAI.getGenerativeModel({
-        model: "gemini-3.5-flash-lite",
-        generationConfig: { temperature: 0.8 },
+        model: GEMINI_MODEL,
+        generationConfig: { temperature: 0.2 },
       });
 
       const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
@@ -53,7 +53,7 @@ class AIService {
 
       return JSON.parse(jsonMatch[0]);
     } catch (error) {
-      console.error("❌ AIService Error Detail:", error.message || error);
+      console.error(" AIService Error Detail:", error.message || error);
       throw new AppError(
         error.message || "AI engine failed to process image.",
         502,
@@ -61,7 +61,7 @@ class AIService {
     }
   }
 
-  // 🟢 New dynamic recovery guidance method to avoid repeating static answers
+  //  New dynamic recovery guidance method to avoid repeating static answers
   async generateRecoveryGuidance(deviationAmount, latestMealType) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey)
@@ -70,7 +70,7 @@ class AIService {
     try {
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({
-        model: "gemini-3.5-flash-lite",
+        model: GEMINI_MODEL,
         generationConfig: { temperature: 0.85 }, // High temperature for maximum variety
       });
 

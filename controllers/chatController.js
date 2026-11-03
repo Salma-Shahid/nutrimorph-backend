@@ -3,6 +3,7 @@ const User = require("../models/User");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const connectDB = require("../config/db");
 const { callGeminiWithRetry } = require("../utils/aiHelper");
+const { GEMINI_MODEL } = require("../config/ai");
 
 // Initialize Google Generative AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -12,10 +13,10 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
  */
 const handleChat = async (req, res) => {
   try {
-    // 🟢 Ensure DB Connection First
+    //  Ensure DB Connection First
     await connectDB();
 
-    const { message, model } = req.body;
+    const { message } = req.body;
     const userId = req.user._id; // Strict Authentication Binding
 
     // Input Validation
@@ -26,7 +27,7 @@ const handleChat = async (req, res) => {
       });
     }
 
-    // 🟢 Fetch user profile strictly by authenticated userId
+    //  Fetch user profile strictly by authenticated userId
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
@@ -35,7 +36,7 @@ const handleChat = async (req, res) => {
       });
     }
 
-    // 🟢 Midnight Daily Reset Check for Free Allowance
+    //  Midnight Daily Reset Check for Free Allowance
     const today = new Date().setHours(0, 0, 0, 0);
     const lastChatDay = new Date(user.lastChatDate || 0).setHours(0, 0, 0, 0);
 
@@ -78,7 +79,7 @@ const handleChat = async (req, res) => {
       `Height: ${user.height ? `${user.height} cm` : "Not provided"}`,
     ].join("\n");
 
-    // 🟢 Fetch recent chat history strictly isolated to this user
+    //  Fetch recent chat history strictly isolated to this user
     const rawHistory = await ChatMessage.find({ user: userId })
       .sort({ createdAt: -1, _id: -1 })
       .limit(10);
@@ -95,10 +96,8 @@ const handleChat = async (req, res) => {
       };
     });
 
-    // Configure Gemini Model (Fallback supported)
-    const selectedModel = model || "gemini-3.5-flash-lite"; // Default to Gemini 3.5 if not specified
     const geminiModel = genAI.getGenerativeModel({
-      model: selectedModel,
+      model: GEMINI_MODEL,
       systemInstruction: `You are NutriBot, an expert AI nutritionist and fitness coach for the NutriMorph application.
 Communicate warmly and professionally in English.
 
@@ -133,7 +132,7 @@ STRICT INSTRUCTIONS:
     }
     await user.save();
 
-    // 🟢 Save user & bot messages strictly bound to user._id
+    //  Save user & bot messages strictly bound to user._id
     const userMsgDoc = await ChatMessage.create({
       user: userId,
       role: "user",
@@ -181,7 +180,7 @@ const getChatHistory = async (req, res) => {
       return res.status(401).json({ message: "User not authenticated." });
     }
 
-    // 🟢 Strict query isolation by user ID
+    //  Strict query isolation by user ID
     const history = await ChatMessage.find({ user: userId }).sort({
       createdAt: 1,
       _id: 1,

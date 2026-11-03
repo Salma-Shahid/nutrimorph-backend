@@ -4,6 +4,7 @@ const aiService = require("../services/aiService");
 const AppError = require("../utils/appError");
 const mongoose = require("mongoose");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GEMINI_MODEL } = require("../config/ai");
 
 // Helper function to calculate streak
 const calculateUserStreak = (lastLoggedDate, currentStreak) => {
@@ -58,7 +59,7 @@ const analyzeMealText = async (req, res) => {
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite", // 🟢 Standardized project model version
+      model: GEMINI_MODEL,
       generationConfig: { temperature: 0.2 },
     });
 
@@ -99,7 +100,7 @@ JSON Schema:
 
 // 2. AI Vision Scanner
 const analyzeMealImage = async (req, res, next) => {
-  console.log("📥 AI Scan request received at backend!");
+  console.log(" AI Scan request received at backend!");
   try {
     if (
       req.user?.subscriptionTier !== "pro" &&
@@ -234,7 +235,7 @@ const getWeeklySummary = async (req, res) => {
       if (apiKey) {
         const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({
-          model: "gemini-3.5-flash-lite", // 🟢 Standardized project model version
+          model: GEMINI_MODEL,
         });
         const prompt = `Analyze this weekly nutrition summary data and provide a concise, encouraging 2-sentence health tip or insight in English: ${JSON.stringify(completeWeeklyData)}`;
 

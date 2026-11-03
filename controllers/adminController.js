@@ -3,7 +3,7 @@ const Meal = require("../models/Meal");
 const Exercise = require("../models/ExerciseModel");
 const Review = require("../models/Review");
 const ActivityLog = require("../models/ActivityLog");
-const sendEmail = require("../utils/sendEmail"); // ✅ Import email utility
+const sendEmail = require("../utils/sendEmail"); //  Import email utility
 
 // 1. Get Platform Stats & Metrics
 const getAdminStats = async (req, res, next) => {
@@ -69,7 +69,7 @@ const updateUserTier = async (req, res, next) => {
         .json({ success: false, message: "User not found" });
     }
 
-    // 🛡️ Create Audit Activity Log
+    //  Create Audit Activity Log
     await ActivityLog.create({
       admin: req.user._id,
       adminEmail: req.user.email,
@@ -103,7 +103,7 @@ const deleteUser = async (req, res, next) => {
     await Meal.deleteMany({ $or: [{ userId: id }, { user: id }] });
     await Exercise.deleteMany({ user: id });
 
-    // 🛡️ Create Audit Activity Log
+    //  Create Audit Activity Log
     await ActivityLog.create({
       admin: req.user._id,
       adminEmail: req.user.email,
@@ -168,7 +168,7 @@ const deleteReview = async (req, res) => {
     }
     await review.deleteOne();
 
-    // 🛡️ Create Audit Activity Log
+    //  Create Audit Activity Log
     await ActivityLog.create({
       admin: req.user._id,
       adminEmail: req.user.email,
@@ -208,7 +208,7 @@ const sendBroadcast = async (req, res) => {
     const emailPromises = targetUsers.map((user) => {
       const htmlContent = `
         <div style="font-family: Arial, sans-serif; background-color: #030712; color: #f3f4f6; padding: 25px; border-radius: 12px; border: 1px solid #1f2937;">
-          <h2 style="color: #34d399; margin-top: 0;">NutriMorph Announcement 🚀</h2>
+          <h2 style="color: #34d399; margin-top: 0;">NutriMorph Announcement </h2>
           <h3 style="color: #ffffff; font-size: 18px;">${title}</h3>
           <p style="font-size: 15px; color: #d1d5db; line-height: 1.6;">${message}</p>
           <hr style="border-color: #1f2937; margin: 20px 0;" />
@@ -226,7 +226,7 @@ const sendBroadcast = async (req, res) => {
 
     await Promise.all(emailPromises);
 
-    // 🛡️ Create Audit Activity Log
+    //  Create Audit Activity Log
     await ActivityLog.create({
       admin: req.user._id,
       adminEmail: req.user.email,
@@ -295,14 +295,13 @@ const getApiUsageStats = async (req, res) => {
 // Test Email Pipeline (SendGrid / Nodemailer)
 const testEmailSystem = async (req, res) => {
   try {
-    const sendEmail = require("../utils/sendEmail"); // Aapka sendEmail utility
-    const adminEmail = req.user.email; // Logged-in admin ka email
+    const sendEmail = require("../utils/sendEmail");
+    const adminEmail = req.user.email;
 
     await sendEmail({
       email: adminEmail,
-      subject: "🧪 NutriMorph Integration Test Email",
-      message:
-        "Aapka SendGrid / Email integration bilkul sahi kaam kar raha hai!",
+      subject: "NutriMorph Integration Test Email",
+      message: "Your email integration is working correctly.",
     });
 
     res.status(200).json({
@@ -319,7 +318,7 @@ const cleanupDatabase = async (req, res) => {
   try {
     const ActivityLog = require("../models/ActivityLog"); // Activity Log model
 
-    // 30 din se purane activity logs delete karein
+    // Delete activity logs older than 30 days.
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const result = await ActivityLog.deleteMany({
       createdAt: { $lt: thirtyDaysAgo },
@@ -337,7 +336,7 @@ const cleanupDatabase = async (req, res) => {
 // Sync & Health Check for Third-Party Services
 const syncServicesHealth = async (req, res) => {
   try {
-    // Services connection verify karke dynamic usage stats return karein
+    // Verify service connections and return current usage statistics.
     res.status(200).json({
       success: true,
       message: "All third-party integration pipelines synced and active!",
@@ -351,7 +350,7 @@ const syncServicesHealth = async (req, res) => {
 // Purge Unused / Orphaned Images from Cloudinary
 const purgeCloudinaryStorage = async (req, res) => {
   try {
-    // Yahan Cloudinary SDK ke zariye unreferenced/orphaned images find & delete ki ja sakti hain
+    // Unreferenced images can be identified and deleted through the Cloudinary SDK.
     res.status(200).json({
       success: true,
       message:
@@ -365,7 +364,7 @@ const purgeCloudinaryStorage = async (req, res) => {
 // Check Expo EAS Build Queues / Status
 const getExpoBuildsStatus = async (req, res) => {
   try {
-    // EAS API ya CLI wrappers ke through active build queues check ki ja sakti hain
+    // Check active build queues through the EAS API or CLI.
     res.status(200).json({
       success: true,
       message:
@@ -380,7 +379,7 @@ const getExpoBuildsStatus = async (req, res) => {
 // Get Payment Gateway & Webhook Health Status
 const getGatewayHealth = async (req, res) => {
   try {
-    // Yahan Stripe / Local gateway API se live volume aur webhook status check kiya ja sakta hai
+    // Check transaction volume and webhook status through the payment gateway API.
     res.status(200).json({
       success: true,
       data: {
@@ -400,7 +399,7 @@ const getGatewayHealth = async (req, res) => {
 // Test Stripe / Gateway Webhook Endpoint Ping
 const testWebhookPing = async (req, res) => {
   try {
-    // Yahan webhook simulation ping ya Stripe endpoint check kiya ja sakta hai
+    // Verify webhook endpoints with a simulation request or gateway health check.
     res.status(200).json({
       success: true,
       message:
@@ -416,7 +415,7 @@ const updateServiceConfig = async (req, res) => {
   try {
     const { service, apiKey } = req.body;
 
-    // Yahan aap service config ko update karne ka logic ya database entry save kar sakti hain
+    // Persist service configuration changes here when storage is implemented.
     console.log(`Updated configuration for service: ${service}`);
 
     res.status(200).json({

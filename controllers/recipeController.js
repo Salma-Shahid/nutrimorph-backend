@@ -24,7 +24,7 @@ const getCategorizedRecipes = async (req, res) => {
   try {
     const { category } = req.query;
 
-    // Sirf global / official recipes fetch hongi, personal saved meals nahi
+    // Fetch global recipes only, excluding personal saved meals.
     let query = {
       isGlobal: true,
     };

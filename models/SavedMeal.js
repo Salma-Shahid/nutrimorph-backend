@@ -5,7 +5,7 @@ const savedMealSchema = new mongoose.Schema(
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: false, // System/Global recipes ke liye optional rakha hai
+      required: false, // Global recipes do not require an owner.
     },
     isGlobal: {
       type: Boolean,

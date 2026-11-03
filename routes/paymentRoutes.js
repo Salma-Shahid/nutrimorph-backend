@@ -3,6 +3,7 @@ const router = express.Router();
 const Stripe = require("stripe");
 const User = require("../models/User");
 const { protect } = require("../middlewares/authMiddleware");
+const { GEMINI_MODEL } = require("../config/ai");
 
 const stripeKey = process.env.STRIPE_SECRET_KEY || "sk_test_dummy_key_for_dev";
 const stripe = Stripe(stripeKey);
@@ -71,7 +72,7 @@ router.get("/success", async (req, res) => {
       });
     }
 
-    // 🔄 Redirect back to web application plans page with success query flag
+    //  Redirect back to web application plans page with success query flag
     res.redirect("https://nutrimorph-web.vercel.app/plans?payment=success");
   } catch (error) {
     res.status(500).send("Database Update Failed");
@@ -82,7 +83,7 @@ router.get("/success", async (req, res) => {
 router.get("/cancel", (req, res) => {
   res.send(`
     <div style="text-align: center; padding: 50px; font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; height: 100vh;">
-      <h1 style="color: #ef4444;">❌ Payment Cancelled</h1>
+      <h1 style="color: #ef4444;"> Payment Cancelled</h1>
       <p style="font-size: 18px; color: #cbd5e1;">Your payment was cancelled.</p>
     </div>
   `);
@@ -108,7 +109,7 @@ router.post("/verify-payment", protect, async (req, res) => {
 // 5. Update / Switch Plan Route
 router.post("/update-plan", protect, async (req, res) => {
   try {
-    const { plan, aiModel } = req.body;
+    const { plan } = req.body;
 
     if (plan && plan.toLowerCase() === "pro") {
       return res.status(400).json({
@@ -135,7 +136,7 @@ router.post("/update-plan", protect, async (req, res) => {
       success: true,
       message: "Subscription successfully updated to Free Plan!",
       user,
-      aiModel: aiModel || "gemini-3.5-flash-lite",
+      aiModel: GEMINI_MODEL,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

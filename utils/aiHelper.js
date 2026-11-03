@@ -17,7 +17,7 @@ async function callGeminiWithRetry(apiCallFn, retries = 2, delay = 1000) {
 
     if (retries > 0 && isTransientError) {
       console.warn(
-        `⚠️ Gemini API busy/rate-limited. Retrying in ${delay}ms... (${retries} attempts left)`,
+        ` Gemini API busy/rate-limited. Retrying in ${delay}ms... (${retries} attempts left)`,
       );
       await new Promise((resolve) => setTimeout(resolve, delay));
       // Recursive call with doubled delay (Exponential Backoff)

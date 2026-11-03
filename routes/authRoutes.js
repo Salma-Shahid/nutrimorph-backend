@@ -6,7 +6,7 @@ const {
   login,
   getMe,
   updateProfile,
-  completeOnboarding, // 🟢 Import Onboarding Controller
+  completeOnboarding, //  Import Onboarding Controller
   deleteAccount,
 } = require("../controllers/authController");
 const { protect } = require("../middlewares/authMiddleware");
@@ -17,10 +17,10 @@ router.post("/login", login);
 router.get("/me", protect, getMe);
 router.put("/profile", protect, updateProfile);
 
-// 🟢 Onboarding Endpoint
+//  Onboarding Endpoint
 router.post("/onboarding", protect, completeOnboarding);
 
-// 🔴 Account Deletion Endpoint (Google Play Compliance P0)
+//  Account Deletion Endpoint (Google Play Compliance P0)
 router.delete("/me", protect, deleteAccount);
 
 module.exports = router;

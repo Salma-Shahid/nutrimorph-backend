@@ -1,6 +1,6 @@
 const User = require("../models/User");
 
-// Water intake update karne aur badges check karne ka controller
+// Update water intake and check milestone badges.
 const updateWaterIntake = async (req, res) => {
   try {
     const { waterIntake, date } = req.body;

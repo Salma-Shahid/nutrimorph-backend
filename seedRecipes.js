@@ -7,16 +7,16 @@ const seedDB = async () => {
   try {
     await mongoose.connect(process.env.MONGO_URI);
 
-    // JSON file read aur parse karna
+    // Read and parse the JSON file.
     const rawData = fs.readFileSync("./recipes.json", "utf-8");
     const sampleRecipes = JSON.parse(rawData);
 
     await SavedMeal.deleteMany({ isGlobal: true });
     await SavedMeal.insertMany(sampleRecipes);
-    console.log("✅ All recipes seeded successfully from JSON file!");
+    console.log(" All recipes seeded successfully from JSON file!");
     process.exit();
   } catch (err) {
-    console.error("❌ Seeding Error:", err.message);
+    console.error(" Seeding Error:", err.message);
     process.exit(1);
   }
 };

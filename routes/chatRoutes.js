@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { protect } = require("../middlewares/authMiddleware");
 const { handleChat, getChatHistory } = require("../controllers/chatController");
-const { aiLimiter } = require("../middlewares/rateLimiter"); // 🟢 AI Rate Limiter Import
+const { aiLimiter } = require("../middlewares/rateLimiter"); //  AI Rate Limiter Import
 
 // POST /api/chat - Send chat message (Protected + AI Rate Limiter)
 router.post("/", protect, aiLimiter, handleChat);

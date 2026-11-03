@@ -2,7 +2,8 @@ const MealPlan = require("../models/MealPlan");
 const User = require("../models/User");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { z } = require("zod");
-const { callGeminiWithRetry } = require("../utils/aiHelper"); // 🟢 Retry Helper Import
+const { callGeminiWithRetry } = require("../utils/aiHelper"); //  Retry Helper Import
+const { GEMINI_MODEL } = require("../config/ai");
 
 // 1. Zod Schema Definitions for AI Meal Plan Output Validation
 const MealItemSchema = z.object({
@@ -67,7 +68,7 @@ const generateMealPlan = async (req, res) => {
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: "gemini-3.5-flash-lite",
+      model: GEMINI_MODEL,
       generationConfig: { temperature: 0.3 },
     });
 
@@ -99,7 +100,7 @@ JSON Schema:
   ]
 }`;
 
-    // 🟢 Call Gemini with Exponential Backoff Retry Wrapper
+    //  Call Gemini with Exponential Backoff Retry Wrapper
     const result = await callGeminiWithRetry(async () => {
       return await model.generateContent(prompt);
     });

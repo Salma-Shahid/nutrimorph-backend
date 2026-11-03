@@ -24,7 +24,7 @@ const globalErrorHandler = (err, req, res, next) => {
   };
 
   if (process.env.NODE_ENV === "development") {
-    console.error("💥 Backend Error Detail:", err);
+    console.error(" Backend Error Detail:", err);
     return res.status(err.statusCode).json({
       ...response,
       error: err,
@@ -36,7 +36,7 @@ const globalErrorHandler = (err, req, res, next) => {
     return res.status(err.statusCode).json(response);
   }
 
-  console.error("ERROR 💥:", err);
+  console.error("ERROR :", err);
   return res.status(500).json({
     success: false,
     status: "error",

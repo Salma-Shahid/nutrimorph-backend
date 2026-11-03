@@ -19,7 +19,7 @@ const waterSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-// Har user aur date ka single record ensure karne ke liye
+// Ensure there is one record per user and date.
 waterSchema.index({ userId: 1, date: 1 }, { unique: true });
 
 module.exports = mongoose.model("Water", waterSchema);
