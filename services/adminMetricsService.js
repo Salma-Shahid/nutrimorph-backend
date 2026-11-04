@@ -68,10 +68,12 @@ const getGoogleServiceAccount = () => {
 
 const getGoogleMonitoringToken = async () => {
   const serviceAccount = getGoogleServiceAccount();
-  if (!serviceAccount?.client_email || !serviceAccount?.private_key) return null;
+  if (!serviceAccount?.client_email || !serviceAccount?.private_key)
+    return null;
 
   const issuedAt = Math.floor(Date.now() / 1000);
-  const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const encode = (value) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
   const unsignedToken = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({
     iss: serviceAccount.client_email,
     scope: "https://www.googleapis.com/auth/monitoring.read",
@@ -137,7 +139,8 @@ const getGeminiProviderQuota = async () => {
   }
   try {
     const token = await getGoogleMonitoringToken();
-    if (!token) throw new Error("Google service account credentials are invalid.");
+    if (!token)
+      throw new Error("Google service account credentials are invalid.");
     const [used, limit] = await Promise.all([
       queryGoogleQuotaMetric(
         projectId,
@@ -213,7 +216,7 @@ const atlasRequest = async (path, params = {}) => {
     process.env.MONGODB_ATLAS_PUBLIC_KEY,
     process.env.MONGODB_ATLAS_PRIVATE_KEY,
   );
-  const response = await client.fetch(url, {
+  const response = await client.fetch(url.toString(), {
     headers: { Accept: "application/vnd.atlas.2025-03-12+json" },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
@@ -228,8 +231,7 @@ const atlasRequest = async (path, params = {}) => {
 
 const getAtlasUsage = async () => {
   const groupId =
-    process.env.MONGODB_ATLAS_GROUP_ID ||
-    process.env.MONGODB_ATLAS_PROJECT_ID;
+    process.env.MONGODB_ATLAS_GROUP_ID || process.env.MONGODB_ATLAS_PROJECT_ID;
   const publicKey = process.env.MONGODB_ATLAS_PUBLIC_KEY;
   const privateKey = process.env.MONGODB_ATLAS_PRIVATE_KEY;
   if (!groupId || !publicKey || !privateKey) {
@@ -293,15 +295,15 @@ const getAtlasUsage = async () => {
       limit: null,
       clusterName: cluster?.name || null,
       clusterCount: clusters.length,
-      message: used == null
-        ? "Atlas is connected; storage measurements are not available for the selected cluster."
-        : "Latest DB_STORAGE_USED measurement from MongoDB Atlas.",
+      message:
+        used == null
+          ? "Atlas is connected; storage measurements are not available for the selected cluster."
+          : "Latest DB_STORAGE_USED measurement from MongoDB Atlas.",
     };
   } catch (error) {
     return {
       ...unavailable(
-            error.message ||
-          "MongoDB Atlas monitoring could not be retrieved.",
+        error.message || "MongoDB Atlas monitoring could not be retrieved.",
       ),
       used: null,
       limit: null,
@@ -310,7 +312,11 @@ const getAtlasUsage = async () => {
 };
 
 const getCloudinaryUsage = async () => {
-  const { CLOUDINARY_CLOUD_NAME: cloudName, CLOUDINARY_API_KEY: apiKey, CLOUDINARY_API_SECRET: apiSecret } = process.env;
+  const {
+    CLOUDINARY_CLOUD_NAME: cloudName,
+    CLOUDINARY_API_KEY: apiKey,
+    CLOUDINARY_API_SECRET: apiSecret,
+  } = process.env;
   if (!cloudName || !apiKey || !apiSecret) {
     return {
       ...unavailable(
@@ -346,8 +352,7 @@ const getCloudinaryUsage = async () => {
 
 const getExpoBuildUsage = async () => {
   const accessToken = process.env.EXPO_ACCESS_TOKEN;
-  const projectId =
-    process.env.EXPO_PROJECT_ID || process.env.EAS_PROJECT_ID;
+  const projectId = process.env.EXPO_PROJECT_ID || process.env.EAS_PROJECT_ID;
   if (!accessToken || !projectId) {
     return {
       ...unavailable(
@@ -408,11 +413,14 @@ const getExpoBuildUsage = async () => {
       };
     }
     const builds = app.builds || [];
-    const since = sinceDate().getTime();
-    let offset = 100;
+    const startOfMonth = new Date(monthStart()).getTime();
+    let offset = 0;
+
     while (
       builds.length >= offset &&
-      !builds.some((build) => new Date(build.createdAt).getTime() < since)
+      !builds.some(
+        (build) => new Date(build.createdAt).getTime() < startOfMonth,
+      )
     ) {
       if (offset >= 10000) {
         return {
@@ -440,9 +448,7 @@ const getExpoBuildUsage = async () => {
       );
       if (nextResponse.data?.errors?.length) {
         throw new Error(
-          nextResponse.data.errors
-            .map((error) => error.message)
-            .join("; "),
+          nextResponse.data.errors.map((error) => error.message).join("; "),
         );
       }
       const nextPage = nextResponse.data?.data?.app?.byId?.builds;
@@ -452,7 +458,9 @@ const getExpoBuildUsage = async () => {
       builds.push(...nextPage);
       if (
         nextPage.length < 100 ||
-        nextPage.some((build) => new Date(build.createdAt).getTime() < since)
+        nextPage.some(
+          (build) => new Date(build.createdAt).getTime() < startOfMonth,
+        )
       ) {
         break;
       }
@@ -462,7 +470,7 @@ const getExpoBuildUsage = async () => {
     return {
       connected: true,
       used: builds.filter(
-        (build) => new Date(build.createdAt).getTime() >= since,
+        (build) => new Date(build.createdAt).getTime() >= startOfMonth,
       ).length,
       limit: configuredLimit("EXPO_MONTHLY_BUILD_LIMIT"),
       activeBuilds: builds.filter((build) =>
@@ -489,7 +497,9 @@ const getExpoBuildUsage = async () => {
 };
 
 const getStripeClient = () =>
-  process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+  process.env.STRIPE_SECRET_KEY
+    ? new Stripe(process.env.STRIPE_SECRET_KEY)
+    : null;
 
 const getStripeUsage = async () => {
   const stripe = getStripeClient();
@@ -504,27 +514,29 @@ const getStripeUsage = async () => {
   }
   try {
     const since = Math.floor(sinceDate().getTime() / 1000);
-    const [subscriptions, webhookEndpoints, events, charges] = await Promise.all([
-      stripe
-        .subscriptions.list({ status: "all", limit: 100 })
-        .autoPagingToArray({ limit: 10000 }),
-      stripe.webhookEndpoints.list({ limit: 100 }),
-      stripe
-        .events.list({ limit: 100, created: { gte: since } })
-        .autoPagingToArray({ limit: 10000 }),
-      stripe
-        .charges.list({ limit: 100, created: { gte: since }, paid: true })
-        .autoPagingToArray({ limit: 10000 }),
-    ]);
+    const [subscriptions, webhookEndpoints, events, charges] =
+      await Promise.all([
+        stripe.subscriptions
+          .list({ status: "all", limit: 100 })
+          .autoPagingToArray({ limit: 10000 }),
+        stripe.webhookEndpoints.list({ limit: 100 }),
+        stripe.events
+          .list({ limit: 100, created: { gte: since } })
+          .autoPagingToArray({ limit: 10000 }),
+        stripe.charges
+          .list({ limit: 100, created: { gte: since }, paid: true })
+          .autoPagingToArray({ limit: 10000 }),
+      ]);
     const activeSubscriptions = subscriptions.filter((subscription) =>
       ["active", "trialing"].includes(subscription.status),
     ).length;
     const pendingWebhookEvents = events.filter(
       (event) => Number(event.pending_webhooks) > 0,
     ).length;
-    const transactionVolumeUSD = charges
-      .filter((charge) => charge.currency === "usd")
-      .reduce((sum, charge) => sum + charge.amount, 0) / 100;
+    const transactionVolumeUSD =
+      charges
+        .filter((charge) => charge.currency === "usd")
+        .reduce((sum, charge) => sum + charge.amount, 0) / 100;
     const activeWebhooks = webhookEndpoints.data.filter(
       (endpoint) => endpoint.status === "enabled",
     ).length;
@@ -534,7 +546,8 @@ const getStripeUsage = async () => {
       transactionVolumeUSD,
       activeWebhooks,
       pendingWebhookEvents,
-      message: "Live Stripe subscriptions, charges, events, and webhook endpoints.",
+      message:
+        "Live Stripe subscriptions, charges, events, and webhook endpoints.",
     };
   } catch (error) {
     return {
