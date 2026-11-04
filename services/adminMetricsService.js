@@ -469,9 +469,7 @@ const getExpoBuildUsage = async () => {
 
     return {
       connected: true,
-      used: builds.filter(
-        (build) => new Date(build.createdAt).getTime() >= startOfMonth,
-      ).length,
+      used: builds.filter((build) => new Date(build.createdAt).getTime() >= startOfMonth).length,
       limit: configuredLimit("EXPO_MONTHLY_BUILD_LIMIT"),
       activeBuilds: builds.filter((build) =>
         ["new", "in_queue", "in_progress"].includes(
