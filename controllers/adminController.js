@@ -3,7 +3,7 @@ const Meal = require("../models/Meal");
 const Exercise = require("../models/ExerciseModel");
 const Review = require("../models/Review");
 const ActivityLog = require("../models/ActivityLog");
-const sendEmail = require("../utils/sendEmail"); //  Import email utility
+const sendEmail = require("../utils/sendEmail");
 const isProUser = require("../utils/isProUser");
 const { getAdminMetrics, getStripeUsage, getExpoBuildUsage } = require("../services/adminMetricsService");
 
@@ -274,8 +274,8 @@ const getApiUsageStats = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        sendgridEmailsUsed: services.sendgrid.used,
-        sendgridLimit: services.sendgrid.limit,
+        resendEmailsSent: services.resend.used,
+        resendMonthlyLimit: services.resend.limit,
         geminiApiCalls: services.gemini.used,
         geminiLimit: services.gemini.limit,
         geminiPromptTokens: services.gemini.promptTokens,
@@ -296,7 +296,7 @@ const getApiUsageStats = async (req, res) => {
         expoOtaBandwidthMB: null,
         expoOtaLimitMB: null,
         services: {
-          sendgrid: services.sendgrid,
+          resend: services.resend,
           gemini: services.gemini,
           atlas: services.atlas,
           cloudinary: services.cloudinary,
@@ -310,24 +310,26 @@ const getApiUsageStats = async (req, res) => {
   }
 };
 
-// Test Email Pipeline (SendGrid / Nodemailer)
+// Test Resend email delivery.
 const testEmailSystem = async (req, res) => {
   try {
-    const sendEmail = require("../utils/sendEmail");
     const adminEmail = req.user.email;
 
     await sendEmail({
       email: adminEmail,
       subject: "NutriMorph Integration Test Email",
-      message: "Your email integration is working correctly.",
+      text: "Your Resend email integration is working correctly.",
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: `Test email successfully sent to ${adminEmail}`,
+      message: `Test email sent successfully to ${adminEmail} through Resend.`,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Resend could not send the test email.",
+    });
   }
 };
 

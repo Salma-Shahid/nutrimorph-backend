@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const Stripe = require("stripe");
 const GeminiUsage = require("../models/GeminiUsage");
+const EmailUsage = require("../models/EmailUsage");
 
 const REQUEST_TIMEOUT_MS = 10000;
 const sinceDate = () => {
@@ -20,46 +21,35 @@ const configuredLimit = (name) => {
   return Number.isFinite(value) && value > 0 ? value : null;
 };
 
-const getSendGridUsage = async () => {
-  if (!process.env.SENDGRID_API_KEY) {
+const getResendUsage = async () => {
+  if (!process.env.RESEND_API_KEY || !process.env.RESEND_FROM_EMAIL) {
     return {
-      ...unavailable("SENDGRID_API_KEY is not configured."),
+      ...unavailable(
+        "RESEND_API_KEY and RESEND_FROM_EMAIL must be configured.",
+      ),
       used: null,
-      limit: configuredLimit("SENDGRID_MONTHLY_LIMIT"),
+      limit: configuredLimit("RESEND_MONTHLY_LIMIT"),
     };
   }
   try {
-    const response = await axios.get("https://api.sendgrid.com/v3/stats", {
-      params: {
-        start_date: monthStart(),
-        end_date: new Date().toISOString().slice(0, 10),
-        aggregated_by: "day",
-      },
-      headers: { Authorization: `Bearer ${process.env.SENDGRID_API_KEY}` },
-      timeout: REQUEST_TIMEOUT_MS,
-    });
-    const used = (response.data || []).reduce((total, day) => {
-      const metrics = day.stats?.reduce(
-        (sum, entry) => sum + (Number(entry.metrics?.requests) || 0),
-        0,
-      );
-      return total + (metrics || 0);
-    }, 0);
+    const usage = await EmailUsage.findOne({ month: monthStart().slice(0, 7) })
+      .select("sentCount")
+      .lean();
     return {
       connected: true,
-      used,
-      limit: configuredLimit("SENDGRID_MONTHLY_LIMIT"),
-      message: "Current-month requests from SendGrid Statistics API.",
+      used: usage?.sentCount || 0,
+      limit: configuredLimit("RESEND_MONTHLY_LIMIT"),
+      source: "NutriMorph Resend send ledger",
+      message:
+        "Successful email sends through NutriMorph's Resend integration this month. Does not include sends made outside this application.",
     };
   } catch (error) {
     return {
       ...unavailable(
-        error.response?.data?.errors?.[0]?.message ||
-          error.message ||
-          "SendGrid usage could not be retrieved.",
+        error.message || "Resend email usage could not be retrieved.",
       ),
       used: null,
-      limit: configuredLimit("SENDGRID_MONTHLY_LIMIT"),
+      limit: configuredLimit("RESEND_MONTHLY_LIMIT"),
     };
   }
 };
@@ -428,15 +418,15 @@ const getStripeUsage = async () => {
 };
 
 const getAdminMetrics = async () => {
-  const [sendgrid, gemini, atlas, cloudinary, expo, stripe] = await Promise.all([
-    getSendGridUsage(),
+  const [resend, gemini, atlas, cloudinary, expo, stripe] = await Promise.all([
+    getResendUsage(),
     getGeminiUsage(),
     getAtlasUsage(),
     getCloudinaryUsage(),
     getExpoBuildUsage(),
     getStripeUsage(),
   ]);
-  return { sendgrid, gemini, atlas, cloudinary, expo, stripe };
+  return { resend, gemini, atlas, cloudinary, expo, stripe };
 };
 
 module.exports = {
