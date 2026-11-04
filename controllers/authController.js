@@ -5,18 +5,15 @@ const User = require("../models/User");
 const ChatMessage = require("../models/ChatMessage"); //  ChatMessage Model Import
 const sendEmail = require("../utils/sendEmail");
 const connectDB = require("../config/db");
+const isProUser = require("../utils/isProUser");
+const normalizeSubscription = require("../utils/normalizeSubscription");
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
 };
 
 const getSubscriptionStatus = (user) => {
-  const isExpired =
-    user.subscriptionExpiresAt &&
-    new Date(user.subscriptionExpiresAt).getTime() <= Date.now();
-  const isPro =
-    user.role === "admin" ||
-    (!isExpired && (user.subscriptionTier === "pro" || user.isPro === true));
+  const isPro = isProUser(user);
   return {
     subscriptionTier: isPro ? "pro" : "free",
     isPro,
@@ -186,6 +183,7 @@ const login = async (req, res) => {
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
+    await normalizeSubscription(user);
 
     // Email Verification Guard Check
     if (!user.isVerified) {
@@ -205,6 +203,13 @@ const login = async (req, res) => {
       dailyCalorieGoal: user.dailyCalorieGoal || user.dailyCalories || 2000,
       ...getSubscriptionStatus(user),
       subscriptionExpiresAt: user.subscriptionExpiresAt,
+      subscriptionStatus: user.subscriptionStatus,
+      trialEndDate: user.trialEndDate,
+      trialUsedAt: user.trialUsedAt,
+      dailyChatCount: user.dailyChatCount,
+      lastChatDate: user.lastChatDate,
+      dailyScanCount: user.dailyScanCount,
+      dailyScanDate: user.dailyScanDate,
       avatar: user.avatar || user.profileImage || null,
       macros: user.macros || user.macrosTarget,
       weight: user.weight,
@@ -325,15 +330,8 @@ const getMe = async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
+    await normalizeSubscription(user);
     const subscription = getSubscriptionStatus(user);
-    if (
-      user.subscriptionTier !== subscription.subscriptionTier ||
-      user.isPro !== subscription.isPro
-    ) {
-      user.subscriptionTier = subscription.subscriptionTier;
-      user.isPro = subscription.isPro;
-      await user.save();
-    }
     res.status(200).json({
       success: true,
       user: {
@@ -343,6 +341,13 @@ const getMe = async (req, res) => {
         ...subscription,
         role: user.role || "user",
         subscriptionExpiresAt: user.subscriptionExpiresAt,
+        subscriptionStatus: user.subscriptionStatus,
+        trialEndDate: user.trialEndDate,
+        trialUsedAt: user.trialUsedAt,
+        dailyChatCount: user.dailyChatCount,
+        lastChatDate: user.lastChatDate,
+        dailyScanCount: user.dailyScanCount,
+        dailyScanDate: user.dailyScanDate,
         dailyCalories: user.dailyCalories || user.dailyCalorieGoal || 2000,
         dailyCalorieGoal: user.dailyCalorieGoal || user.dailyCalorieTarget,
         dailyCalorieTarget:

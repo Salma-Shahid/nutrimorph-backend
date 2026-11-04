@@ -23,7 +23,6 @@ const {
 
 const { protect } = require("../middlewares/authMiddleware");
 const requireAdmin = require("../middlewares/adminMiddleware");
-const { updateServiceConfig } = require("../controllers/adminController");
 
 // All admin routes require authentication + admin role
 router.use(protect, requireAdmin);
@@ -42,6 +41,7 @@ router.post("/broadcast", sendBroadcast);
 router.get("/logs", getActivityLogs);
 // API usage stats route
 router.get("/api-stats", getApiUsageStats);
+router.get("/api-usage", getApiUsageStats);
 
 router.post("/test-email", testEmailSystem);
 router.post("/cleanup-db", cleanupDatabase);
@@ -50,7 +50,5 @@ router.post("/purge-cloudinary", purgeCloudinaryStorage);
 router.post("/test-webhook", testWebhookPing);
 router.get("/expo-builds", getExpoBuildsStatus);
 router.get("/gateway-health", getGatewayHealth);
-// Route for updating service configuration & billing keys
-router.patch("/update-config", updateServiceConfig);
 
 module.exports = router;

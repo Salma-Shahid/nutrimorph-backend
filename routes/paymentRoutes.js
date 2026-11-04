@@ -4,9 +4,92 @@ const Stripe = require("stripe");
 const User = require("../models/User");
 const { protect } = require("../middlewares/authMiddleware");
 const { GEMINI_MODEL } = require("../config/ai");
+const normalizeSubscription = require("../utils/normalizeSubscription");
 
 const stripeKey = process.env.STRIPE_SECRET_KEY || "sk_test_dummy_key_for_dev";
 const stripe = Stripe(stripeKey);
+
+const syncStripeSubscription = async (subscription) => {
+  const userId =
+    subscription.metadata?.userId ||
+    (
+      await User.findOne({ stripeSubscriptionId: subscription.id }).select(
+        "_id",
+      )
+    )?._id;
+  if (!userId) return null;
+
+  const active =
+    ["active", "trialing"].includes(subscription.status) &&
+    (!subscription.current_period_end ||
+      subscription.current_period_end * 1000 > Date.now()) &&
+    (subscription.status !== "trialing" ||
+      (subscription.trial_end && subscription.trial_end * 1000 > Date.now()));
+
+  return User.findByIdAndUpdate(
+    userId,
+    {
+      subscriptionTier: active ? "pro" : "free",
+      isPro: active,
+      subscriptionStatus: subscription.status,
+      subscriptionExpiresAt:
+        active && subscription.current_period_end
+          ? new Date(subscription.current_period_end * 1000)
+          : null,
+      trialEndDate: subscription.trial_end
+        ? new Date(subscription.trial_end * 1000)
+        : null,
+      ...(subscription.trial_end ? { trialUsedAt: new Date() } : {}),
+      ...(subscription.customer
+        ? { stripeCustomerId: String(subscription.customer) }
+        : {}),
+      stripeSubscriptionId: String(subscription.id),
+    },
+    { new: true },
+  );
+};
+
+const handleStripeWebhook = async (req, res) => {
+  if (!process.env.STRIPE_WEBHOOK_SECRET) {
+    return res.status(503).json({ message: "Stripe webhook is not configured." });
+  }
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      req.headers["stripe-signature"],
+      process.env.STRIPE_WEBHOOK_SECRET,
+    );
+  } catch (error) {
+    return res
+      .status(400)
+      .json({ message: `Invalid Stripe webhook: ${error.message}` });
+  }
+
+  try {
+    if (
+      event.type === "customer.subscription.updated" ||
+      event.type === "customer.subscription.deleted"
+    ) {
+      await syncStripeSubscription(event.data.object);
+    } else if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      if (session.subscription) {
+        const subscription = await stripe.subscriptions.retrieve(
+          String(session.subscription),
+        );
+        await syncStripeSubscription(subscription);
+      }
+    }
+    return res.status(200).json({ received: true });
+  } catch (error) {
+    console.error("Could not synchronize Stripe subscription webhook:", error);
+    return res
+      .status(500)
+      .json({ message: "Subscription synchronization failed." });
+  }
+};
 
 // 1. Create Checkout Session for Pro Plan
 router.post("/create-checkout-session", protect, async (req, res) => {
@@ -17,7 +100,26 @@ router.post("/create-checkout-session", protect, async (req, res) => {
       });
     }
 
-    const { plan, billingCycle } = req.body;
+    const { plan, billingCycle, trialDays } = req.body;
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: "User not found." });
+    await normalizeSubscription(user);
+    if (user.subscriptionTier === "pro" && user.isPro) {
+      return res.status(409).json({
+        message: "Your Pro subscription is already active.",
+      });
+    }
+
+    const startTrial = Number(trialDays) === 3;
+    if (trialDays != null && !startTrial) {
+      return res.status(400).json({ message: "Unsupported trial duration." });
+    }
+    if (startTrial && user.trialUsedAt) {
+      return res.status(409).json({
+        code: "TRIAL_ALREADY_USED",
+        message: "The free trial has already been used for this account.",
+      });
+    }
 
     const isYearly = billingCycle === "yearly";
     const unitAmount = isYearly ? 9900 : 999; // $99/yr or $9.99/mo
@@ -51,13 +153,21 @@ router.post("/create-checkout-session", protect, async (req, res) => {
         },
       ],
       client_reference_id: String(req.user._id),
+      ...(user.stripeCustomerId ? { customer: user.stripeCustomerId } : {}),
+      ...(user.email ? { customer_email: user.email } : {}),
       metadata: {
         userId: String(req.user._id),
         billingCycle: isYearly ? "yearly" : "monthly",
+        trialDays: startTrial ? "3" : "0",
         brand: "NutriMorph App",
       },
       subscription_data: {
-        metadata: { userId: String(req.user._id), brand: "NutriMorph App" },
+        ...(startTrial ? { trial_period_days: 3 } : {}),
+        metadata: {
+          userId: String(req.user._id),
+          trialDays: startTrial ? "3" : "0",
+          brand: "NutriMorph App",
+        },
       },
       success_url: `${serverUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${serverUrl}/api/payment/cancel`,
@@ -84,7 +194,7 @@ router.get("/success", async (req, res) => {
     const subscriptionStatus = session.subscription?.status;
     if (
       session.mode !== "subscription" ||
-      session.payment_status !== "paid" ||
+      !["paid", "no_payment_required"].includes(session.payment_status) ||
       !userId ||
       !["active", "trialing"].includes(subscriptionStatus)
     ) {
@@ -92,13 +202,30 @@ router.get("/success", async (req, res) => {
         `${(process.env.FRONTEND_URL || process.env.CLIENT_URL || "https://nutrimorph.app").replace(/\/$/, "")}/?payment=failed`,
       );
     }
-    const user = await User.findByIdAndUpdate(userId, {
-      subscriptionTier: "pro",
-      isPro: true,
-      subscriptionExpiresAt: new Date(
-        session.subscription.current_period_end * 1000,
-      ),
-    });
+    const subscription = session.subscription;
+    const user = await User.findByIdAndUpdate(
+      userId,
+      {
+        subscriptionTier: "pro",
+        isPro: true,
+        subscriptionStatus,
+        subscriptionExpiresAt: subscription.current_period_end
+          ? new Date(subscription.current_period_end * 1000)
+          : null,
+        trialStartDate: subscription.trial_start
+          ? new Date(subscription.trial_start * 1000)
+          : undefined,
+        trialEndDate: subscription.trial_end
+          ? new Date(subscription.trial_end * 1000)
+          : null,
+        ...(subscription.customer
+          ? { stripeCustomerId: String(subscription.customer) }
+          : {}),
+        stripeSubscriptionId: String(subscription.id),
+        ...(session.metadata?.trialDays === "3" ? { trialUsedAt: new Date() } : {}),
+      },
+      { new: true },
+    );
     if (!user) return res.status(404).send("Account not found.");
     const appUrl = (
       process.env.FRONTEND_URL ||
@@ -124,12 +251,20 @@ router.get("/cancel", (req, res) => {
 // 4. Direct Verify Route
 router.post("/verify-payment", protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select(
-      "_id name email subscriptionTier isPro subscriptionExpiresAt",
-    );
+    let user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    res.json({
+    if (user.stripeSubscriptionId && process.env.STRIPE_SECRET_KEY) {
+      const subscription = await stripe.subscriptions.retrieve(
+        user.stripeSubscriptionId,
+      );
+      user =
+        (await syncStripeSubscription(subscription)) ||
+        (await User.findById(req.user._id));
+    }
+    await normalizeSubscription(user);
+    user.password = undefined;
+    return res.json({
       success: true,
       user,
     });
@@ -160,7 +295,9 @@ router.post("/update-plan", protect, async (req, res) => {
 
     user.subscriptionTier = "free";
     user.isPro = false;
+    user.subscriptionStatus = "free";
     user.subscriptionExpiresAt = null;
+    user.trialEndDate = null;
 
     await user.save();
 
@@ -183,7 +320,9 @@ router.post("/switch-to-free", protect, async (req, res) => {
 
     user.subscriptionTier = "free";
     user.isPro = false;
+    user.subscriptionStatus = "free";
     user.subscriptionExpiresAt = null;
+    user.trialEndDate = null;
     await user.save();
 
     res.json({
@@ -196,4 +335,5 @@ router.post("/switch-to-free", protect, async (req, res) => {
   }
 });
 
+router.handleStripeWebhook = handleStripeWebhook;
 module.exports = router;

@@ -7,6 +7,78 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { GEMINI_MODEL } = require("../config/ai");
 const { updateStreak } = require("../utils/streak");
 const isProUser = require("../utils/isProUser");
+const normalizeSubscription = require("../utils/normalizeSubscription");
+const recordGeminiUsage = require("../utils/recordGeminiUsage");
+
+const getUtcDateKey = () => new Date().toISOString().slice(0, 10);
+
+const reserveDailyScan = async (userId) => {
+  const user = await User.findById(userId);
+  if (!user) {
+    return { status: 404, code: "USER_NOT_FOUND", message: "User not found." };
+  }
+  await normalizeSubscription(user);
+
+  const date = getUtcDateKey();
+  if (isProUser(user)) {
+    return {
+      allowed: true,
+      isPro: true,
+      date,
+      count: user.dailyScanCount || 0,
+    };
+  }
+
+  const resetCount = await User.findOneAndUpdate(
+    { _id: userId, dailyScanDate: { $ne: date } },
+    { $set: { dailyScanDate: date, dailyScanCount: 1 } },
+    { new: true },
+  );
+  if (resetCount) {
+    return { allowed: true, isPro: false, date, count: 1 };
+  }
+
+  const incrementCount = await User.findOneAndUpdate(
+    {
+      _id: userId,
+      dailyScanDate: date,
+      $or: [
+        { dailyScanCount: { $lt: 1 } },
+        { dailyScanCount: { $exists: false } },
+      ],
+    },
+    { $inc: { dailyScanCount: 1 } },
+    { new: true },
+  );
+  if (incrementCount) {
+    return {
+      allowed: true,
+      isPro: false,
+      date,
+      count: incrementCount.dailyScanCount,
+    };
+  }
+
+  return {
+    allowed: false,
+    status: 403,
+    code: "TRIAL_REQUIRED",
+    message:
+      "Your free meal scan for today has been used. Start a 3-day free trial or upgrade to Pro for unlimited scans.",
+  };
+};
+
+const releaseDailyScan = async (userId, reservation) => {
+  if (!reservation?.allowed || reservation.isPro) return;
+  await User.updateOne(
+    {
+      _id: userId,
+      dailyScanDate: reservation.date,
+      dailyScanCount: { $gte: 1 },
+    },
+    { $inc: { dailyScanCount: -1 } },
+  );
+};
 
 // Helper function to calculate streak
 // 1. AI Text Analysis
@@ -53,6 +125,7 @@ JSON Schema:
 }`;
 
     const result = await model.generateContent(prompt);
+    await recordGeminiUsage(result);
     let rawText = result.response.text();
 
     if (!rawText || rawText.trim() === "") {
@@ -78,21 +151,23 @@ JSON Schema:
 
 // 2. AI Vision Scanner
 const analyzeMealImage = async (req, res, next) => {
-  console.log(" AI Scan request received at backend!");
+  const userId = req.user._id || req.user.id;
+  let scanUsage;
   try {
-    if (!isProUser(req.user)) {
-      return res.status(403).json({
-        success: false,
-        code: "PRO_REQUIRED",
-        message: "This feature requires a Pro plan. Upgrade to continue.",
-      });
-    }
-
     const imageBase64 = req.body.imageBase64 || req.body.image;
     if (!imageBase64) {
       return res.status(400).json({
         success: false,
         message: "Image data missing",
+      });
+    }
+
+    scanUsage = await reserveDailyScan(userId);
+    if (!scanUsage.allowed) {
+      return res.status(scanUsage.status || 403).json({
+        success: false,
+        code: scanUsage.code || "TRIAL_REQUIRED",
+        message: scanUsage.message,
       });
     }
 
@@ -102,9 +177,40 @@ const analyzeMealImage = async (req, res, next) => {
       success: true,
       status: "success",
       data: nutritionData,
+      usage: { dailyScanCount: scanUsage.count, dailyScanDate: scanUsage.date },
     });
   } catch (error) {
+    try {
+      await releaseDailyScan(userId, scanUsage);
+    } catch (releaseError) {
+      console.error(
+        "Could not restore the free scan allowance after a failed analysis:",
+        releaseError,
+      );
+    }
     next(error);
+  }
+};
+
+const reserveMealScanAllowance = async (req, res) => {
+  try {
+    const usage = await reserveDailyScan(req.user._id || req.user.id);
+    if (!usage.allowed) {
+      return res.status(usage.status || 403).json({
+        success: false,
+        code: usage.code || "TRIAL_REQUIRED",
+        message: usage.message,
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      usage: { dailyScanCount: usage.count, dailyScanDate: usage.date },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Could not verify the daily scan allowance.",
+    });
   }
 };
 
@@ -218,6 +324,7 @@ const getWeeklySummary = async (req, res) => {
         const prompt = `Analyze this weekly nutrition summary data and provide a concise, encouraging 2-sentence health tip or insight in English: ${JSON.stringify(completeWeeklyData)}`;
 
         const result = await model.generateContent(prompt);
+        await recordGeminiUsage(result);
         const responseText = result.response.text();
         if (responseText) {
           aiInsight = responseText.trim();
@@ -245,7 +352,16 @@ const getWeeklySummary = async (req, res) => {
 // 5. Log Meal (With Streak Calculation, Badge Trigger & MealType Support)
 const logMeal = async (req, res, next) => {
   try {
-    const { name, calories, protein, carbs, fats, date, mealType } = req.body;
+    const {
+      name,
+      calories,
+      kcal,
+      protein,
+      carbs,
+      fats,
+      date,
+      mealType,
+    } = req.body;
     const userId = req.user?._id || req.user?.id;
 
     if (!userId) {
@@ -261,7 +377,7 @@ const logMeal = async (req, res, next) => {
       userId: userId,
       user: userId,
       name: name || "Scanned Meal",
-      calories: Number(calories) || 0,
+      calories: Number(calories ?? kcal) || 0,
       protein: Number(protein) || 0,
       carbs: Number(carbs) || 0,
       fats: Number(fats) || 0,
@@ -419,6 +535,7 @@ module.exports = {
   getRecoveryGuidance,
   getDailySummary,
   getWeeklySummary,
+  reserveMealScanAllowance,
   logMeal,
   deleteMeal,
   updateMeal,

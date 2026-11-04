@@ -17,9 +17,13 @@ router.get("/recovery-guidance", protect, mealController.getRecoveryGuidance);
 
 // 2. AI Scan Routes
 router.post(
+  "/scan-allowance",
+  protect,
+  mealController.reserveMealScanAllowance,
+);
+router.post(
   "/scan",
   protect,
-  checkPro,
   aiLimiter,
   validateRequest(analyzeMealSchema),
   mealController.analyzeMealImage,
@@ -27,7 +31,6 @@ router.post(
 router.post(
   "/scan-ai",
   protect,
-  checkPro,
   aiLimiter,
   validateRequest(analyzeMealSchema),
   mealController.analyzeMealImage,

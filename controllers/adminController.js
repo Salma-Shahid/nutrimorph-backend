@@ -5,6 +5,7 @@ const Review = require("../models/Review");
 const ActivityLog = require("../models/ActivityLog");
 const sendEmail = require("../utils/sendEmail"); //  Import email utility
 const isProUser = require("../utils/isProUser");
+const { getAdminMetrics, getStripeUsage, getExpoBuildUsage } = require("../services/adminMetricsService");
 
 // 1. Get Platform Stats & Metrics
 const getAdminStats = async (req, res, next) => {
@@ -127,18 +128,21 @@ const deleteUser = async (req, res, next) => {
 // 5. Get Revenue Statistics
 const getRevenueStats = async (req, res) => {
   try {
-    const users = await User.find().select(
-      "role subscriptionTier isPro subscriptionExpiresAt",
-    );
-    const proUsersCount = users.filter(isProUser).length;
-    const estimatedRevenue = proUsersCount * 9.99; // $9.99 per pro user
+    const stripe = await getStripeUsage();
+    if (!stripe.connected) {
+      return res.status(503).json({
+        success: false,
+        message: stripe.message,
+      });
+    }
 
     res.status(200).json({
       success: true,
       data: {
-        totalRevenue: estimatedRevenue,
-        activeSubscriptions: proUsersCount,
+        totalRevenue: stripe.transactionVolumeUSD,
+        activeSubscriptions: stripe.activeSubscriptions,
         currency: "USD",
+        source: "Stripe",
       },
     });
   } catch (error) {
@@ -266,30 +270,39 @@ const getActivityLogs = async (req, res) => {
 // Get System & Third-Party API Usage Stats
 const getApiUsageStats = async (req, res) => {
   try {
+    const services = await getAdminMetrics();
     res.status(200).json({
       success: true,
       data: {
-        // Email & AI
-        sendgridEmailsUsed: 120,
-        sendgridLimit: 3000,
-        geminiApiCalls: 430,
-        geminiLimit: 10000,
-
-        // Storage & Database
-        dbStorageUsedMB: 45.5,
-        dbLimitMB: 512,
-        cloudinaryStorageGB: 1.2,
-        cloudinaryLimitGB: 25,
-
-        // Mobile & Expo Free Tier
-        expoBuildsUsed: 18,
-        expoBuildsLimit: 30, // Free tier monthly build limit
-        expoOtaBandwidthMB: 350,
-        expoOtaLimitMB: 1000,
-
-        // Monetization & Analytics
-        revenueCatActiveSubs: 1,
-        firebaseActiveSessions: 45,
+        sendgridEmailsUsed: services.sendgrid.used,
+        sendgridLimit: services.sendgrid.limit,
+        geminiApiCalls: services.gemini.used,
+        geminiLimit: services.gemini.limit,
+        geminiPromptTokens: services.gemini.promptTokens,
+        geminiCandidateTokens: services.gemini.candidateTokens,
+        dbStorageUsedMB:
+          services.atlas.used == null
+            ? null
+            : services.atlas.used / 1024 / 1024,
+        dbLimitMB:
+          services.atlas.limit == null
+            ? null
+            : services.atlas.limit / 1024 / 1024,
+        cloudinaryStorageGB: services.cloudinary.used,
+        cloudinaryLimitGB: services.cloudinary.limit,
+        expoBuildsUsed: services.expo.used,
+        expoBuildsLimit: services.expo.limit,
+        expoActiveBuilds: services.expo.activeBuilds,
+        expoOtaBandwidthMB: null,
+        expoOtaLimitMB: null,
+        services: {
+          sendgrid: services.sendgrid,
+          gemini: services.gemini,
+          atlas: services.atlas,
+          cloudinary: services.cloudinary,
+          expo: services.expo,
+          stripe: services.stripe,
+        },
       },
     });
   } catch (error) {
@@ -341,10 +354,16 @@ const cleanupDatabase = async (req, res) => {
 // Sync & Health Check for Third-Party Services
 const syncServicesHealth = async (req, res) => {
   try {
-    // Verify service connections and return current usage statistics.
+    const services = await getAdminMetrics();
+    const connected = Object.entries(services)
+      .filter(([name]) => name !== "gemini")
+      .every(([, value]) => value.connected);
     res.status(200).json({
       success: true,
-      message: "All third-party integration pipelines synced and active!",
+      message: connected
+        ? "Configured service metrics have been refreshed."
+        : "Some integrations are unavailable. Review service status and server configuration.",
+      services,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -369,12 +388,11 @@ const purgeCloudinaryStorage = async (req, res) => {
 // Check Expo EAS Build Queues / Status
 const getExpoBuildsStatus = async (req, res) => {
   try {
-    // Check active build queues through the EAS API or CLI.
+    const builds = await getExpoBuildUsage();
     res.status(200).json({
       success: true,
-      message:
-        "Expo EAS build queues fetched successfully. All queues operational.",
-      activeBuilds: [],
+      message: builds.message,
+      data: builds,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -384,16 +402,21 @@ const getExpoBuildsStatus = async (req, res) => {
 // Get Payment Gateway & Webhook Health Status
 const getGatewayHealth = async (req, res) => {
   try {
-    // Check transaction volume and webhook status through the payment gateway API.
+    const stripe = await getStripeUsage();
     res.status(200).json({
       success: true,
       data: {
-        gatewayName: "Stripe & Local Gateways",
-        status: "Healthy",
-        activeWebhooks: 4,
-        failedWebhooksLast24h: 0,
-        totalTransactionVolumeUSD: 9.99,
-        lastWebhookPing: new Date(),
+        gatewayName: "Stripe",
+        status: stripe.connected
+          ? stripe.pendingWebhookEvents > 0
+            ? "Attention required"
+            : "Connected"
+          : "Not configured",
+        activeWebhooks: stripe.activeWebhooks,
+        failedWebhooksLast24h: stripe.pendingWebhookEvents,
+        totalTransactionVolumeUSD: stripe.transactionVolumeUSD,
+        lastWebhookPing: stripe.connected ? new Date() : null,
+        message: stripe.message,
       },
     });
   } catch (error) {
@@ -404,28 +427,17 @@ const getGatewayHealth = async (req, res) => {
 // Test Stripe / Gateway Webhook Endpoint Ping
 const testWebhookPing = async (req, res) => {
   try {
-    // Verify webhook endpoints with a simulation request or gateway health check.
+    const stripe = await getStripeUsage();
+    if (!stripe.connected) {
+      return res.status(503).json({
+        success: false,
+        message: stripe.message,
+      });
+    }
     res.status(200).json({
       success: true,
       message:
-        "Webhook simulation ping successful! All event endpoints responding properly.",
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// Update Service Configuration (API Keys / Tokens / Billing Secret)
-const updateServiceConfig = async (req, res) => {
-  try {
-    const { service, apiKey } = req.body;
-
-    // Persist service configuration changes here when storage is implemented.
-    console.log(`Updated configuration for service: ${service}`);
-
-    res.status(200).json({
-      success: true,
-      message: `Configuration for ${service} updated successfully!`,
+        `Stripe API responded. ${stripe.activeWebhooks} webhook endpoints are enabled; ${stripe.pendingWebhookEvents} recent events are pending delivery.`,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -436,7 +448,6 @@ module.exports = {
   getAdminStats,
   getAllUsers,
   updateUserTier,
-  updateServiceConfig,
   testWebhookPing,
   getGatewayHealth,
   testEmailSystem,

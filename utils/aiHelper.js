@@ -1,3 +1,5 @@
+const recordGeminiUsage = require("./recordGeminiUsage");
+
 /**
  * Helper function to retry Gemini API calls with exponential backoff
  * @param {Function} apiCallFn - The async function making the Gemini API call
@@ -6,7 +8,9 @@
  */
 async function callGeminiWithRetry(apiCallFn, retries = 2, delay = 1000) {
   try {
-    return await apiCallFn();
+    const result = await apiCallFn();
+    await recordGeminiUsage(result);
+    return result;
   } catch (error) {
     // Check for rate limit (429) or temporary server errors (5xx)
     const status = error.status || error.statusCode;

@@ -28,10 +28,18 @@ const userSchema = new mongoose.Schema(
     },
     isPro: { type: Boolean, default: false },
     subscriptionExpiresAt: { type: Date },
+    subscriptionStatus: { type: String, default: "free" },
+    trialStartDate: { type: Date },
+    trialEndDate: { type: Date },
+    trialUsedAt: { type: Date },
+    stripeCustomerId: { type: String },
+    stripeSubscriptionId: { type: String },
 
     //  Free Limits Tracking
     dailyChatCount: { type: Number, default: 0 },
     lastChatDate: { type: Date, default: Date.now },
+    dailyScanCount: { type: Number, default: 0 },
+    dailyScanDate: { type: String, default: null },
 
     //  Profile & Health Metrics (Enhanced for Onboarding Wizard)
     isOnboarded: { type: Boolean, default: false },

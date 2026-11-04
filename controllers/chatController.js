@@ -5,6 +5,14 @@ const connectDB = require("../config/db");
 const { callGeminiWithRetry } = require("../utils/aiHelper");
 const { GEMINI_MODEL } = require("../config/ai");
 const mongoose = require("mongoose");
+const isProUser = require("../utils/isProUser");
+const normalizeSubscription = require("../utils/normalizeSubscription");
+
+const getUtcDayBounds = () => {
+  const start = new Date();
+  start.setUTCHours(0, 0, 0, 0);
+  return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+};
 
 // Initialize Google Generative AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -13,6 +21,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
  * Handle incoming user chat messages with Gemini AI
  */
 const handleChat = async (req, res) => {
+  let freeMessageReservation = null;
   try {
     //  Ensure DB Connection First
     await connectDB();
@@ -37,30 +46,55 @@ const handleChat = async (req, res) => {
       });
     }
 
-    //  Midnight Daily Reset Check for Free Allowance
-    const today = new Date().setHours(0, 0, 0, 0);
-    const lastChatDay = new Date(user.lastChatDate || 0).setHours(0, 0, 0, 0);
-
-    if (today > lastChatDay) {
-      user.dailyChatCount = 0;
-      user.lastChatDate = Date.now();
-    }
-
-    // Free User Limit Guard (Max 5 Messages/Day)
+    await normalizeSubscription(user);
     const currentTier = (user.subscriptionTier || "free").toLowerCase();
-    const isFreeTier = currentTier === "free";
+    const isFreeTier = !isProUser(user);
+    const { start, end } = getUtcDayBounds();
+    const now = new Date();
 
-    if (isFreeTier && user.dailyChatCount >= 5) {
-      const limitMsg =
-        "Your daily limit of 5 free messages has been reached. Upgrade to the Pro plan for unlimited messaging!";
+    if (isFreeTier) {
+      const newDayReservation = await User.findOneAndUpdate(
+      {
+        _id: userId,
+        $or: [
+          { lastChatDate: { $lt: start } },
+          { lastChatDate: { $exists: false } },
+          { lastChatDate: null },
+        ],
+      },
+      { $set: { dailyChatCount: 1, lastChatDate: now } },
+      { new: true },
+      );
+      const sameDayReservation =
+      newDayReservation ||
+      (await User.findOneAndUpdate(
+        {
+          _id: userId,
+          lastChatDate: { $gte: start, $lt: end },
+          $or: [
+            { dailyChatCount: { $lt: 1 } },
+            { dailyChatCount: { $exists: false } },
+          ],
+        },
+        { $inc: { dailyChatCount: 1 } },
+        { new: true },
+      ));
 
-      return res.status(200).json({
+      if (!sameDayReservation) {
+      return res.status(403).json({
         success: false,
         limitReached: true,
-        reply: limitMsg,
-        message: limitMsg,
+        code: "TRIAL_REQUIRED",
+        reply:
+          "Your free NutriBot message for today has been used. Start a 3-day free trial for unlimited AI support.",
+        message:
+          "Your free NutriBot message for today has been used. Start a 3-day free trial for unlimited AI support.",
         remainingChats: 0,
       });
+      }
+      freeMessageReservation = { userId, start, end };
+      user.dailyChatCount = sameDayReservation.dailyChatCount;
+      user.lastChatDate = sameDayReservation.lastChatDate;
     }
 
     // User Context Grounding
@@ -127,12 +161,6 @@ STRICT INSTRUCTIONS:
 
     const responseText = result.response.text();
 
-    // Increment chat count
-    if (isFreeTier) {
-      user.dailyChatCount += 1;
-    }
-    await user.save();
-
     //  Save user & bot messages strictly bound to user._id
     const userMsgDoc = await ChatMessage.create({
       user: userId,
@@ -156,10 +184,31 @@ STRICT INSTRUCTIONS:
       botMessage: botMsgDoc,
       dailyChatCount: user.dailyChatCount,
       remainingChats: isFreeTier
-        ? Math.max(0, 5 - user.dailyChatCount)
+        ? Math.max(0, 1 - user.dailyChatCount)
         : "unlimited",
+      usageDate: start.toISOString().slice(0, 10),
     });
   } catch (error) {
+    if (freeMessageReservation) {
+      try {
+        await User.updateOne(
+          {
+            _id: freeMessageReservation.userId,
+            lastChatDate: {
+              $gte: freeMessageReservation.start,
+              $lt: freeMessageReservation.end,
+            },
+            dailyChatCount: { $gt: 0 },
+          },
+          { $inc: { dailyChatCount: -1 } },
+        );
+      } catch (reservationError) {
+        console.error(
+          "Could not restore the free chat allowance after a failed response:",
+          reservationError,
+        );
+      }
+    }
     console.error("Error in handleChat controller:", error);
     return res.status(500).json({
       success: false,
