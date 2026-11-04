@@ -198,25 +198,44 @@ const getGeminiUsage = async () => {
   }
 };
 
-const atlasRequest = (path, params) =>
-  axios.get(`https://cloud.mongodb.com/api/atlas/v2${path}`, {
-    auth: {
-      username: process.env.MONGODB_ATLAS_PUBLIC_KEY,
-      password: process.env.MONGODB_ATLAS_PRIVATE_KEY,
-    },
-    headers: { Accept: "application/vnd.atlas.2023-01-01+json" },
-    params,
-    timeout: REQUEST_TIMEOUT_MS,
+const atlasRequest = async (path, params = {}) => {
+  const url = new URL(`https://cloud.mongodb.com/api/atlas/v2${path}`);
+  for (const [key, value] of Object.entries(params)) {
+    if (Array.isArray(value)) {
+      value.forEach((entry) => url.searchParams.append(key, entry));
+    } else if (value != null) {
+      url.searchParams.set(key, value);
+    }
+  }
+
+  const { default: DigestClient } = await import("digest-fetch");
+  const client = new DigestClient(
+    process.env.MONGODB_ATLAS_PUBLIC_KEY,
+    process.env.MONGODB_ATLAS_PRIVATE_KEY,
+  );
+  const response = await client.fetch(url, {
+    headers: { Accept: "application/vnd.atlas.2025-03-12+json" },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail =
+      data?.detail || data?.error || data?.message || response.statusText;
+    throw new Error(`MongoDB Atlas API returned ${response.status}: ${detail}`);
+  }
+  return { data };
+};
 
 const getAtlasUsage = async () => {
-  const groupId = process.env.MONGODB_ATLAS_GROUP_ID;
+  const groupId =
+    process.env.MONGODB_ATLAS_GROUP_ID ||
+    process.env.MONGODB_ATLAS_PROJECT_ID;
   const publicKey = process.env.MONGODB_ATLAS_PUBLIC_KEY;
   const privateKey = process.env.MONGODB_ATLAS_PRIVATE_KEY;
   if (!groupId || !publicKey || !privateKey) {
     return {
       ...unavailable(
-        "MONGODB_ATLAS_GROUP_ID, MONGODB_ATLAS_PUBLIC_KEY, and MONGODB_ATLAS_PRIVATE_KEY are required.",
+        "MONGODB_ATLAS_PUBLIC_KEY, MONGODB_ATLAS_PRIVATE_KEY, and MONGODB_ATLAS_GROUP_ID (or MONGODB_ATLAS_PROJECT_ID) are required.",
       ),
       used: null,
       limit: null,
@@ -229,8 +248,20 @@ const getAtlasUsage = async () => {
     ]);
     const clusters = clustersResponse.data?.results || [];
     const configuredCluster = process.env.MONGODB_ATLAS_CLUSTER_NAME;
-    const cluster =
-      clusters.find((item) => item.name === configuredCluster) || clusters[0];
+    const cluster = configuredCluster
+      ? clusters.find((item) => item.name === configuredCluster)
+      : clusters[0];
+    if (configuredCluster && !cluster) {
+      return {
+        connected: true,
+        used: null,
+        limit: null,
+        clusterName: configuredCluster,
+        clusterCount: clusters.length,
+        message:
+          "Atlas credentials are valid, but MONGODB_ATLAS_CLUSTER_NAME does not match a cluster in this project.",
+      };
+    }
     const processes = (processesResponse.data?.results || []).filter(
       (item) =>
         !configuredCluster ||
@@ -269,9 +300,7 @@ const getAtlasUsage = async () => {
   } catch (error) {
     return {
       ...unavailable(
-        error.response?.data?.detail ||
-          error.response?.data?.error ||
-          error.message ||
+            error.message ||
           "MongoDB Atlas monitoring could not be retrieved.",
       ),
       used: null,
@@ -317,26 +346,119 @@ const getCloudinaryUsage = async () => {
 
 const getExpoBuildUsage = async () => {
   const accessToken = process.env.EXPO_ACCESS_TOKEN;
-  const projectId = process.env.EXPO_PROJECT_ID;
+  const projectId =
+    process.env.EXPO_PROJECT_ID || process.env.EAS_PROJECT_ID;
   if (!accessToken || !projectId) {
     return {
-      ...unavailable("EXPO_ACCESS_TOKEN and EXPO_PROJECT_ID are required."),
+      ...unavailable(
+        "EXPO_ACCESS_TOKEN and EXPO_PROJECT_ID (or EAS_PROJECT_ID) are required.",
+      ),
       used: null,
       limit: configuredLimit("EXPO_MONTHLY_BUILD_LIMIT"),
       activeBuilds: null,
     };
   }
   try {
-    const response = await axios.get(
-      `https://api.expo.dev/v2/projects/${encodeURIComponent(projectId)}/builds`,
+    const query = `
+      query NutriMorphAdminBuildMetrics(
+        $appId: String!
+        $offset: Int!
+        $limit: Int!
+      ) {
+        app {
+          byId(appId: $appId) {
+            id
+            builds(offset: $offset, limit: $limit) {
+              id
+              status
+              createdAt
+            }
+          }
+        }
+      }
+    `;
+    const response = await axios.post(
+      "https://api.expo.dev/graphql",
       {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        params: { limit: 100 },
+        query,
+        variables: { appId: projectId, offset: 0, limit: 100 },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
         timeout: REQUEST_TIMEOUT_MS,
       },
     );
-    const builds = response.data?.data || [];
+    if (response.data?.errors?.length) {
+      throw new Error(
+        response.data.errors.map((error) => error.message).join("; "),
+      );
+    }
+    const app = response.data?.data?.app?.byId;
+    if (!app) {
+      return {
+        ...unavailable(
+          "Expo could not find this project or the access token cannot view it. Use the EAS project UUID and a token with project access.",
+        ),
+        used: null,
+        limit: configuredLimit("EXPO_MONTHLY_BUILD_LIMIT"),
+        activeBuilds: null,
+      };
+    }
+    const builds = app.builds || [];
     const since = sinceDate().getTime();
+    let offset = 100;
+    while (
+      builds.length >= offset &&
+      !builds.some((build) => new Date(build.createdAt).getTime() < since)
+    ) {
+      if (offset >= 10000) {
+        return {
+          ...unavailable(
+            "Expo has more than 10,000 recent builds; the usage count was not truncated.",
+          ),
+          used: null,
+          limit: configuredLimit("EXPO_MONTHLY_BUILD_LIMIT"),
+          activeBuilds: null,
+        };
+      }
+      const nextResponse = await axios.post(
+        "https://api.expo.dev/graphql",
+        {
+          query,
+          variables: { appId: projectId, offset, limit: 100 },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          timeout: REQUEST_TIMEOUT_MS,
+        },
+      );
+      if (nextResponse.data?.errors?.length) {
+        throw new Error(
+          nextResponse.data.errors
+            .map((error) => error.message)
+            .join("; "),
+        );
+      }
+      const nextPage = nextResponse.data?.data?.app?.byId?.builds;
+      if (!nextPage) {
+        throw new Error("Expo did not return the next page of builds.");
+      }
+      builds.push(...nextPage);
+      if (
+        nextPage.length < 100 ||
+        nextPage.some((build) => new Date(build.createdAt).getTime() < since)
+      ) {
+        break;
+      }
+      offset += 100;
+    }
+
     return {
       connected: true,
       used: builds.filter(
@@ -344,13 +466,21 @@ const getExpoBuildUsage = async () => {
       ).length,
       limit: configuredLimit("EXPO_MONTHLY_BUILD_LIMIT"),
       activeBuilds: builds.filter((build) =>
-        ["new", "in-queue", "in-progress"].includes(build.status),
+        ["new", "in_queue", "in_progress"].includes(
+          String(build.status).toLowerCase(),
+        ),
       ).length,
-      message: "Builds returned by the Expo EAS project API.",
+      projectId,
+      message: "Build metrics retrieved from the Expo EAS GraphQL API.",
     };
   } catch (error) {
     return {
-      ...unavailable(error.response?.data?.message || error.message),
+      ...unavailable(
+        error.response?.data?.errors?.[0]?.message ||
+          error.response?.data?.message ||
+          error.message ||
+          "Expo build metrics could not be retrieved.",
+      ),
       used: null,
       limit: configuredLimit("EXPO_MONTHLY_BUILD_LIMIT"),
       activeBuilds: null,
