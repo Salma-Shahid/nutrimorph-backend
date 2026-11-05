@@ -234,17 +234,22 @@ const logExerciseOrSteps = async (req, res, next) => {
       await user.save();
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: record,
       userStats: user
         ? {
-            steps: user.steps,
-            dailySteps: record.steps,
-            streakCount: user.streakCount,
-            unlockedBadges: user.unlockedBadges,
+            steps: user.steps || 0,
+            dailySteps: record.steps || 0,
+            streakCount: user.streakCount || 0,
+            unlockedBadges: user.unlockedBadges || [],
           }
-        : null,
+        : {
+            steps: 0,
+            dailySteps: record.steps || 0,
+            streakCount: 0,
+            unlockedBadges: [],
+          },
       message: "Exercise and steps updated successfully!",
     });
   } catch (error) {
