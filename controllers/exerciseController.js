@@ -3,7 +3,7 @@ const User = require("../models/User");
 const AppError = require("../utils/appError");
 const { updateStreak } = require("../utils/streak");
 
-//  Get Daily Exercise & Steps Summary (Strict Per-User Isolation)
+// Get Daily Exercise & Steps Summary (Strict Per-User Isolation)
 const getExerciseData = async (req, res, next) => {
   try {
     const { date } = req.query;
@@ -30,7 +30,7 @@ const getExerciseData = async (req, res, next) => {
   }
 };
 
-//  Log Exercise or Update Steps with Accurate Streak & Badges Evaluator
+// Log Exercise or Update Steps with Accurate Streak & Badges Evaluator
 const logExerciseOrSteps = async (req, res, next) => {
   try {
     const {
@@ -78,36 +78,42 @@ const logExerciseOrSteps = async (req, res, next) => {
     if (stepsDelta !== undefined) {
       const delta = Number(stepsDelta);
       const query = { user: userId, date: logDate };
-      const previousRecord = await Exercise.findOne(query);
-      const previousDailySteps = Number(previousRecord?.steps) || 0;
-      const record = await Exercise.findOneAndUpdate(
-        query,
-        [
-          {
-            $set: {
-              steps: {
-                $max: [0, { $add: [{ $ifNull: ["$steps", 0] }, delta] }],
-              },
-              user: userId,
-              date: logDate,
-              caloriesBurned: { $ifNull: ["$caloriesBurned", 0] },
-              exerciseName: { $ifNull: ["$exerciseName", ""] },
-            },
-          },
-        ],
-        { upsert: true, new: true },
-      );
+
+      // Safe find and update without aggregation pipeline to prevent 500 errors
+      let record = await Exercise.findOne(query);
+      const previousDailySteps = Number(record?.steps) || 0;
+      const newDailySteps = Math.max(0, previousDailySteps + delta);
+
+      if (record) {
+        record.steps = newDailySteps;
+        await record.save();
+      } else {
+        record = await Exercise.create({
+          user: userId,
+          date: logDate,
+          steps: newDailySteps,
+          caloriesBurned: 0,
+          exerciseName: "",
+        });
+      }
+
       const actualDelta = Number(record.steps) - previousDailySteps;
       const user = await User.findById(userId);
+
       if (user) {
         user.steps = Math.max(0, (Number(user.steps) || 0) + actualDelta);
-        const streak = updateStreak(
-          user.lastLoggedDate,
-          user.streakCount,
-          logDate,
-        );
-        user.streakCount = streak.streak;
-        user.lastLoggedDate = streak.lastLoggedDate;
+
+        try {
+          const streak = updateStreak(
+            user.lastLoggedDate,
+            user.streakCount,
+            logDate,
+          );
+          user.streakCount = streak.streak;
+          user.lastLoggedDate = streak.lastLoggedDate;
+        } catch (streakErr) {
+          console.error("Streak calculation error:", streakErr);
+        }
 
         if (!user.unlockedBadges) user.unlockedBadges = [];
 
@@ -128,7 +134,7 @@ const logExerciseOrSteps = async (req, res, next) => {
           [30000, "step_30k"],
         ]) {
           if (record.steps >= count && !existingBadges.has(badgeId)) {
-            user.unlockedBadges.push({ badgeId });
+            user.unlockedBadges.push({ badgeId, unlockedAt: new Date() });
             existingBadges.add(badgeId);
           }
         }
@@ -138,14 +144,13 @@ const logExerciseOrSteps = async (req, res, next) => {
       return res.status(200).json({
         success: true,
         data: record,
-        userStats: user
-          ? {
-              steps: user.steps,
-              dailySteps: record.steps,
-              streakCount: user.streakCount,
-              unlockedBadges: user.unlockedBadges,
-            }
-          : null,
+        userStats: {
+          steps: user ? Number(user.steps) || 0 : 0,
+          dailySteps: Number(record.steps) || 0,
+          streakCount: user ? Number(user.streakCount) || 0 : 0,
+          unlockedBadges: user ? user.unlockedBadges || [] : [],
+        },
+        message: "Steps delta updated successfully!",
       });
     }
 
@@ -189,16 +194,20 @@ const logExerciseOrSteps = async (req, res, next) => {
         user.steps = (Number(user.steps) || 0) + Number(steps);
       }
 
-      //  Robust Streak Management Logic
-      const streak = updateStreak(
-        user.lastLoggedDate,
-        user.streakCount,
-        logDate,
-      );
-      user.streakCount = streak.streak;
-      user.lastLoggedDate = streak.lastLoggedDate;
+      // Robust Streak Management Logic with try-catch
+      try {
+        const streak = updateStreak(
+          user.lastLoggedDate,
+          user.streakCount,
+          logDate,
+        );
+        user.streakCount = streak.streak;
+        user.lastLoggedDate = streak.lastLoggedDate;
+      } catch (streakErr) {
+        console.error("Streak calculation error:", streakErr);
+      }
 
-      //  Badge Auto-Unlock Evaluation Logic (Checking Daily Record Steps & User Stats)
+      // Badge Auto-Unlock Evaluation Logic
       if (!user.unlockedBadges) user.unlockedBadges = [];
       const earnedBadgeIds = user.unlockedBadges.map((badge) => {
         const badgeId =
@@ -215,7 +224,6 @@ const logExerciseOrSteps = async (req, res, next) => {
         { count: 30000, id: "step_30k" },
       ];
 
-      // Check against today's record steps OR cumulative user steps
       const currentDailySteps = record.steps || 0;
 
       stepMilestones.forEach((milestone) => {
@@ -237,22 +245,16 @@ const logExerciseOrSteps = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       data: record,
-      userStats: user
-        ? {
-            steps: user.steps || 0,
-            dailySteps: record.steps || 0,
-            streakCount: user.streakCount || 0,
-            unlockedBadges: user.unlockedBadges || [],
-          }
-        : {
-            steps: 0,
-            dailySteps: record.steps || 0,
-            streakCount: 0,
-            unlockedBadges: [],
-          },
+      userStats: {
+        steps: user ? Number(user.steps) || 0 : 0,
+        dailySteps: Number(record.steps) || 0,
+        streakCount: user ? Number(user.streakCount) || 0 : 0,
+        unlockedBadges: user ? user.unlockedBadges || [] : [],
+      },
       message: "Exercise and steps updated successfully!",
     });
   } catch (error) {
+    console.error("Log Exercise Or Steps Error:", error);
     next(error);
   }
 };
