@@ -55,7 +55,9 @@ const logExerciseOrSteps = async (req, res, next) => {
     }
     if (
       steps !== undefined &&
-      (!Number.isFinite(Number(steps)) || !Number.isInteger(Number(steps)) || Number(steps) < 0)
+      (!Number.isFinite(Number(steps)) ||
+        !Number.isInteger(Number(steps)) ||
+        Number(steps) < 0)
     ) {
       return res.status(400).json({
         success: false,
@@ -106,6 +108,8 @@ const logExerciseOrSteps = async (req, res, next) => {
         );
         user.streakCount = streak.streak;
         user.lastLoggedDate = streak.lastLoggedDate;
+
+        if (!user.unlockedBadges) user.unlockedBadges = [];
 
         const existingBadges = new Set(
           (user.unlockedBadges || []).map((badge) =>
