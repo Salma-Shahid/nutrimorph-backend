@@ -51,7 +51,9 @@ const syncStripeSubscription = async (subscription) => {
 
 const handleStripeWebhook = async (req, res) => {
   if (!process.env.STRIPE_WEBHOOK_SECRET) {
-    return res.status(503).json({ message: "Stripe webhook is not configured." });
+    return res
+      .status(503)
+      .json({ message: "Stripe webhook is not configured." });
   }
 
   let event;
@@ -100,7 +102,7 @@ router.post("/create-checkout-session", protect, async (req, res) => {
       });
     }
 
-    const { plan, billingCycle, trialDays } = req.body;
+    const { billingCycle, trialDays } = req.body;
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found." });
     await normalizeSubscription(user);
@@ -125,16 +127,12 @@ router.post("/create-checkout-session", protect, async (req, res) => {
     const unitAmount = isYearly ? 9900 : 999; // $99/yr or $9.99/mo
     const interval = isYearly ? "year" : "month";
 
-    const appUrl = (
-      process.env.FRONTEND_URL ||
-      process.env.CLIENT_URL ||
-      "https://nutrimorph.app"
-    ).replace(/\/$/, "");
     const serverUrl = (
       process.env.SERVER_URL || `${req.protocol}://${req.get("host")}`
     ).replace(/\/$/, "");
 
-    const session = await stripe.checkout.sessions.create({
+    // Strictly ensure only ONE parameter is passed to Stripe
+    const checkoutPayload = {
       payment_method_types: ["card"],
       mode: "subscription",
       line_items: [
@@ -153,8 +151,6 @@ router.post("/create-checkout-session", protect, async (req, res) => {
         },
       ],
       client_reference_id: String(req.user._id),
-      ...(user.stripeCustomerId ? { customer: user.stripeCustomerId } : {}),
-      ...(user.email ? { customer_email: user.email } : {}),
       metadata: {
         userId: String(req.user._id),
         billingCycle: isYearly ? "yearly" : "monthly",
@@ -171,7 +167,16 @@ router.post("/create-checkout-session", protect, async (req, res) => {
       },
       success_url: `${serverUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${serverUrl}/api/payment/cancel`,
-    });
+    };
+
+    // Strict single condition check
+    if (user.stripeCustomerId && user.stripeCustomerId.trim() !== "") {
+      checkoutPayload.customer = user.stripeCustomerId;
+    } else if (user.email) {
+      checkoutPayload.customer_email = user.email;
+    }
+
+    const session = await stripe.checkout.sessions.create(checkoutPayload);
 
     res.json({ success: true, url: session.url, id: session.id });
   } catch (error) {
@@ -189,8 +194,7 @@ router.get("/success", async (req, res) => {
     const session = await stripe.checkout.sessions.retrieve(String(sessionId), {
       expand: ["subscription"],
     });
-    const userId =
-      session.client_reference_id || session.metadata?.userId;
+    const userId = session.client_reference_id || session.metadata?.userId;
     const subscriptionStatus = session.subscription?.status;
     if (
       session.mode !== "subscription" ||
@@ -222,7 +226,9 @@ router.get("/success", async (req, res) => {
           ? { stripeCustomerId: String(subscription.customer) }
           : {}),
         stripeSubscriptionId: String(subscription.id),
-        ...(session.metadata?.trialDays === "3" ? { trialUsedAt: new Date() } : {}),
+        ...(session.metadata?.trialDays === "3"
+          ? { trialUsedAt: new Date() }
+          : {}),
       },
       { new: true },
     );
