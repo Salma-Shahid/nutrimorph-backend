@@ -1,13 +1,17 @@
 const mongoose = require("mongoose");
 
-let isConnected = false;
+let cached = global.mongoose;
+
+if (!cached) {
+  cached = global.mongoose = { conn: null, promise: null };
+}
 
 const connectDB = async () => {
-  if (isConnected && mongoose.connection.readyState === 1) {
-    return;
+  if (cached.conn) {
+    return cached.conn;
   }
 
-  try {
+  if (!cached.promise) {
     const mongoUri = process.env.MONGO_URI || process.env.MONGODB_URI;
     if (!mongoUri) {
       throw new Error(
@@ -15,16 +19,26 @@ const connectDB = async () => {
       );
     }
 
-    const db = await mongoose.connect(mongoUri, {
-      serverSelectionTimeoutMS: 5000, // 5 seconds fast timeout
-    });
+    const opts = {
+      bufferCommands: false,
+      serverSelectionTimeoutMS: 5000,
+    };
 
-    isConnected = db.connections[0].readyState === 1;
-    console.log("MongoDB Connected Successfully");
-  } catch (error) {
-    console.error("MongoDB Connection Error:", error.message);
-    throw error;
+    cached.promise = mongoose.connect(mongoUri, opts).then((mongoose) => {
+      console.log("MongoDB Connected Successfully");
+      return mongoose;
+    });
   }
+
+  try {
+    cached.conn = await cached.promise;
+  } catch (e) {
+    cached.promise = null;
+    console.error("MongoDB Connection Error:", e.message);
+    throw e;
+  }
+
+  return cached.conn;
 };
 
 module.exports = connectDB;
