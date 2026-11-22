@@ -11,6 +11,7 @@ const chatMessageSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+    email: { type: String, lowercase: true, trim: true },
     role: {
       type: String,
       enum: ["user", "system", "bot", "model"],

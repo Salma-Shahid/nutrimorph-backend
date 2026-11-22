@@ -3,48 +3,32 @@ const Meal = require("../models/Meal");
 const Exercise = require("../models/ExerciseModel");
 const Review = require("../models/Review");
 const ActivityLog = require("../models/ActivityLog");
+const ProcessedPaddleEvent = require("../models/ProcessedPaddleEvent");
+const PaddlePayout = require("../models/PaddlePayout");
 const sendEmail = require("../utils/sendEmail");
 const isProUser = require("../utils/isProUser");
 const {
   getAdminMetrics,
-  getStripeUsage,
+  getPaddleUsage,
   getExpoBuildUsage,
 } = require("../services/adminMetricsService");
+const { syncUserCancellation } = require("../services/paddleBilling");
 
-// 1. Get Platform Stats & Metrics (Database & Stripe Integrated)
+// 1. Get Platform Stats & Metrics
 const getAdminStats = async (req, res, next) => {
   try {
     // Database counts
-    const totalUsers = await User.countDocuments();
-    const users = await User.find().select(
+    const activeUserFilter = { deactivatedAt: null };
+    const totalUsers = await User.countDocuments(activeUserFilter);
+    const users = await User.find(activeUserFilter).select(
       "role subscriptionTier isPro subscriptionExpiresAt",
     );
-    const proUsers = users.filter((user) => {
-      // Yahan aapka isProUser helper function check karega
-      return (
-        user.isPro ||
-        (user.subscriptionTier && user.subscriptionTier !== "free")
-      );
-    }).length;
+    const proUsers = users.filter(
+      (user) => user.role !== "admin" && isProUser(user),
+    ).length;
 
     const totalMeals = await Meal.countDocuments();
     const totalExercises = await Exercise.countDocuments();
-
-    // Optional: Agar aap Stripe se live metrics fetch karna chahte hain toh safe try-catch ke sath:
-    let stripeMetrics = {
-      subscriptionVolume: 0,
-      activeSubscriptionsCount: proUsers, // Fallback to DB pro users
-    };
-
-    try {
-      // Agar aapke project mein stripe instance configured hai:
-      // const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-      // const subscriptions = await stripe.subscriptions.list({ status: 'active', limit: 100 });
-      // stripeMetrics.activeSubscriptionsCount = subscriptions.data.length;
-      // Note: Agar aap Stripe test data clear kar chuki hain, toh yeh bilkul 0 ya actual count dega.
-    } catch (stripeErr) {
-      console.error("Stripe metrics fetch warning:", stripeErr.message);
-    }
 
     return res.status(200).json({
       success: true,
@@ -54,7 +38,7 @@ const getAdminStats = async (req, res, next) => {
         freeUsers: Math.max(0, totalUsers - proUsers),
         totalMeals,
         totalExercises,
-        activeSubscriptions: stripeMetrics.activeSubscriptionsCount,
+        activeSubscriptions: proUsers,
       },
     });
   } catch (error) {
@@ -66,55 +50,18 @@ const getAdminStats = async (req, res, next) => {
 const getAllUsers = async (req, res, next) => {
   try {
     const users = await User.find().select("-password").sort({ createdAt: -1 });
+    const data = users.map((user) => {
+      const activePro = isProUser(user);
+      return {
+        ...user.toObject(),
+        subscriptionTier: activePro ? "pro" : "free",
+        isPro: activePro,
+      };
+    });
     return res.status(200).json({
       success: true,
       count: users.length,
-      data: users,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// 3. Update User Subscription Tier (Free <-> Pro)
-const updateUserTier = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { subscriptionTier } = req.body; // "free" or "pro"
-
-    if (!["free", "pro"].includes(subscriptionTier)) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid subscription tier" });
-    }
-
-    const user = await User.findByIdAndUpdate(
-      id,
-      {
-        subscriptionTier,
-        isPro: subscriptionTier === "pro",
-      },
-      { new: true, runValidators: true },
-    ).select("-password");
-
-    if (!user) {
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found" });
-    }
-
-    //  Create Audit Activity Log
-    await ActivityLog.create({
-      admin: req.user._id,
-      adminEmail: req.user.email,
-      action: "UPDATE_TIER",
-      details: `Changed user ${user.email} subscription tier to '${subscriptionTier}'`,
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: `User subscription updated to ${subscriptionTier}`,
-      data: user,
+      data,
     });
   } catch (error) {
     next(error);
@@ -125,7 +72,7 @@ const updateUserTier = async (req, res, next) => {
 const deleteUser = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const user = await User.findByIdAndDelete(id);
+    const user = await User.findById(id);
 
     if (!user) {
       return res
@@ -133,21 +80,27 @@ const deleteUser = async (req, res, next) => {
         .json({ success: false, message: "User not found" });
     }
 
-    // Clean up user operational data
-    await Meal.deleteMany({ $or: [{ userId: id }, { user: id }] });
-    await Exercise.deleteMany({ user: id });
+    if (user.paddleSubscriptionId) {
+      await syncUserCancellation(user, true);
+    }
+
+    user.deactivatedAt = new Date();
+    user.deactivationExpiresAt = new Date(
+      user.deactivatedAt.getTime() + 30 * 24 * 60 * 60 * 1000,
+    );
+    await user.save();
 
     //  Create Audit Activity Log
     await ActivityLog.create({
       admin: req.user._id,
       adminEmail: req.user.email,
       action: "DELETE_USER",
-      details: `Deleted user account ${user.email} and associated data`,
+      details: `Deactivated user account ${user.email} for the 30-day recovery period`,
     });
 
     return res.status(200).json({
       success: true,
-      message: "User and associated data deleted successfully",
+      message: "User account deactivated for the 30-day recovery period",
     });
   } catch (error) {
     next(error);
@@ -157,21 +110,21 @@ const deleteUser = async (req, res, next) => {
 // 5. Get Revenue Statistics
 const getRevenueStats = async (req, res) => {
   try {
-    const stripe = await getStripeUsage();
-    if (!stripe.connected) {
+    const paddle = await getPaddleUsage();
+    if (!paddle.connected) {
       return res.status(503).json({
         success: false,
-        message: stripe.message,
+        message: paddle.message,
       });
     }
 
     res.status(200).json({
       success: true,
       data: {
-        totalRevenue: stripe.transactionVolumeUSD,
-        activeSubscriptions: stripe.activeSubscriptions,
+        totalRevenue: paddle.transactionVolumeUSD,
+        activeSubscriptions: paddle.activeSubscriptions,
         currency: "USD",
-        source: "Stripe",
+        source: "Verified Paddle transactions",
       },
     });
   } catch (error) {
@@ -182,9 +135,7 @@ const getRevenueStats = async (req, res) => {
 // 6. Get all reviews for moderation
 const getAllReviews = async (req, res) => {
   try {
-    const reviews = await Review.find()
-      .sort({ createdAt: -1 })
-      .populate("user", "name email");
+    const reviews = await Review.find().sort({ createdAt: -1 }).limit(200);
     res.status(200).json({
       success: true,
       count: reviews.length,
@@ -204,14 +155,15 @@ const deleteReview = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Review not found" });
     }
-    await review.deleteOne();
+    review.isHidden = true;
+    await review.save();
 
     //  Create Audit Activity Log
     await ActivityLog.create({
       admin: req.user._id,
       adminEmail: req.user.email,
       action: "DELETE_REVIEW",
-      details: `Deleted user review ID: ${req.params.id}`,
+      details: `Hidden Play Store review ID: ${req.params.id}`,
     });
 
     res
@@ -233,7 +185,7 @@ const sendBroadcast = async (req, res) => {
         .json({ success: false, message: "Title and message are required" });
     }
 
-    let query = {};
+    let query = { deactivatedAt: null };
     if (targetAudience === "pro") {
       query.subscriptionTier = "pro";
     } else if (targetAudience === "free") {
@@ -330,7 +282,7 @@ const getApiUsageStats = async (req, res) => {
           atlas: services.atlas,
           cloudinary: services.cloudinary,
           expo: services.expo,
-          stripe: services.stripe,
+          paddle: services.paddle,
         },
       },
     });
@@ -433,21 +385,30 @@ const getExpoBuildsStatus = async (req, res) => {
 // Get Payment Gateway & Webhook Health Status
 const getGatewayHealth = async (req, res) => {
   try {
-    const stripe = await getStripeUsage();
+    const paddle = await getPaddleUsage();
+    const [pendingWebhookEvents, payouts] = await Promise.all([
+      ProcessedPaddleEvent.countDocuments({ processedAt: { $exists: false } }),
+      PaddlePayout.find()
+        .sort({ lastEventAt: -1 })
+        .limit(10)
+        .select("status amount currencyCode remittanceReference lastEventAt")
+        .lean(),
+    ]);
     res.status(200).json({
       success: true,
       data: {
-        gatewayName: "Stripe",
-        status: stripe.connected
-          ? stripe.pendingWebhookEvents > 0
+        gatewayName: "Paddle Billing",
+        status: paddle.connected
+          ? pendingWebhookEvents > 0
             ? "Attention required"
-            : "Connected"
+            : "Configured"
           : "Not configured",
-        activeWebhooks: stripe.activeWebhooks,
-        failedWebhooksLast24h: stripe.pendingWebhookEvents,
-        totalTransactionVolumeUSD: stripe.transactionVolumeUSD,
-        lastWebhookPing: stripe.connected ? new Date() : null,
-        message: stripe.message,
+        activeWebhooks: null,
+        pendingWebhookEvents,
+        totalTransactionVolumeUSD: paddle.transactionVolumeUSD,
+        verifiedTransactions30d: paddle.verifiedTransactions30d,
+        payouts,
+        message: paddle.message,
       },
     });
   } catch (error) {
@@ -455,19 +416,20 @@ const getGatewayHealth = async (req, res) => {
   }
 };
 
-// Test Stripe / Gateway Webhook Endpoint Ping
+// Report Paddle billing configuration without claiming that a webhook ping was performed.
 const testWebhookPing = async (req, res) => {
   try {
-    const stripe = await getStripeUsage();
-    if (!stripe.connected) {
+    const paddle = await getPaddleUsage();
+    if (!paddle.connected) {
       return res.status(503).json({
         success: false,
-        message: stripe.message,
+        message: paddle.message,
       });
     }
     res.status(200).json({
       success: true,
-      message: `Stripe API responded. ${stripe.activeWebhooks} webhook endpoints are enabled; ${stripe.pendingWebhookEvents} recent events are pending delivery.`,
+      message:
+        "Paddle API and webhook signing credentials are configured. Confirm notification delivery and merchant payout details in Paddle.",
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -477,7 +439,6 @@ const testWebhookPing = async (req, res) => {
 module.exports = {
   getAdminStats,
   getAllUsers,
-  updateUserTier,
   testWebhookPing,
   getGatewayHealth,
   testEmailSystem,

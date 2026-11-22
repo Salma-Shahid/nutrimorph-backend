@@ -2,6 +2,8 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const AppError = require("../utils/appError");
 const { callGeminiWithRetry } = require("../utils/aiHelper");
 const { GEMINI_MODEL } = require("../config/ai");
+const recordGeminiUsage = require("../utils/recordGeminiUsage");
+const validateNutritionData = require("../utils/validateNutritionData");
 
 class AIService {
   async analyzeFoodImage(imageBase64) {
@@ -16,18 +18,30 @@ class AIService {
 
       const model = genAI.getGenerativeModel({
         model: GEMINI_MODEL,
-        generationConfig: { temperature: 0.2 },
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: "application/json",
+        },
       });
 
-      const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+      const dataUrlMatch = imageBase64.match(
+        /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/,
+      );
+      const cleanBase64 = dataUrlMatch
+        ? dataUrlMatch[2]
+        : imageBase64.replace(/^data:image\/[^;]+;base64,/, "");
+      const mimeType = dataUrlMatch?.[1] || "image/jpeg";
 
       const prompt = `
-        Analyze this food image and estimate the nutritional information.
+        Analyze the visible edible food and estimate nutrition for one complete visible serving.
+        If the portion size cannot be estimated reliably, use 100 g and state that assumption.
         Write the food name and all text in professional Standard English.
         Do not use Urdu, Roman Urdu, or mixed-language phrases.
-        Return ONLY a raw JSON object with no markdown syntax in this exact format:
+        Return one JSON object. Calories must be kcal; protein, carbohydrates, and fats must be grams.
+        Do not invent precision; round calories to a whole number and macros to one decimal.
         {
           "name": "Food item name",
+          "servingSize": "Estimated serving description, or 100 g",
           "calories": number,
           "protein": number,
           "carbs": number,
@@ -38,22 +52,18 @@ class AIService {
       const imagePart = {
         inlineData: {
           data: cleanBase64,
-          mimeType: "image/jpeg",
+          mimeType,
         },
       };
 
       const result = await callGeminiWithRetry(async () => {
         return await model.generateContent([prompt, imagePart]);
       });
+      await recordGeminiUsage(result);
 
       const rawText = result.response.text().trim();
 
-      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new AppError("Invalid JSON returned by AI engine", 502);
-      }
-
-      return JSON.parse(jsonMatch[0]);
+      return validateNutritionData(rawText);
     } catch (error) {
       console.error(" AIService Error Detail:", error.message || error);
       throw new AppError(

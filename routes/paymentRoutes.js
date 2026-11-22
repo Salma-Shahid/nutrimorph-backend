@@ -1,345 +1,526 @@
+const crypto = require("crypto");
 const express = require("express");
 const router = express.Router();
-const Stripe = require("stripe");
 const User = require("../models/User");
+const PaddleCheckoutIntent = require("../models/PaddleCheckoutIntent");
+const PaddlePayout = require("../models/PaddlePayout");
+const PaddleTransaction = require("../models/PaddleTransaction");
+const ProcessedPaddleEvent = require("../models/ProcessedPaddleEvent");
 const { protect } = require("../middlewares/authMiddleware");
 const { GEMINI_MODEL } = require("../config/ai");
-const normalizeSubscription = require("../utils/normalizeSubscription");
+const isProUser = require("../utils/isProUser");
+const connectDB = require("../config/db");
+const {
+  assertPaddleConfigured,
+  assertPaddlePricesConfigured,
+  getPaddleClient,
+  syncUserCancellation,
+} = require("../services/paddleBilling");
 
-const stripeKey = process.env.STRIPE_SECRET_KEY || "sk_test_dummy_key_for_dev";
-const stripe = Stripe(stripeKey);
-
-const syncStripeSubscription = async (subscription) => {
-  const userId =
-    subscription.metadata?.userId ||
-    (
-      await User.findOne({ stripeSubscriptionId: subscription.id }).select(
-        "_id",
-      )
-    )?._id;
-  if (!userId) return null;
-
-  const active =
-    ["active", "trialing"].includes(subscription.status) &&
-    (!subscription.current_period_end ||
-      subscription.current_period_end * 1000 > Date.now()) &&
-    (subscription.status !== "trialing" ||
-      (subscription.trial_end && subscription.trial_end * 1000 > Date.now()));
-
-  return User.findByIdAndUpdate(
-    userId,
-    {
-      subscriptionTier: active ? "pro" : "free",
-      isPro: active,
-      subscriptionStatus: subscription.status,
-      subscriptionExpiresAt:
-        active && subscription.current_period_end
-          ? new Date(subscription.current_period_end * 1000)
-          : null,
-      trialEndDate: subscription.trial_end
-        ? new Date(subscription.trial_end * 1000)
-        : null,
-      ...(subscription.trial_end ? { trialUsedAt: new Date() } : {}),
-      ...(subscription.customer
-        ? { stripeCustomerId: String(subscription.customer) }
-        : {}),
-      stripeSubscriptionId: String(subscription.id),
-    },
-    { new: true },
-  );
-};
-
-const handleStripeWebhook = async (req, res) => {
-  if (!process.env.STRIPE_WEBHOOK_SECRET) {
-    return res
-      .status(503)
-      .json({ message: "Stripe webhook is not configured." });
-  }
-
-  let event;
-  try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      req.headers["stripe-signature"],
-      process.env.STRIPE_WEBHOOK_SECRET,
-    );
-  } catch (error) {
-    return res
-      .status(400)
-      .json({ message: `Invalid Stripe webhook: ${error.message}` });
-  }
-
-  try {
-    if (
-      event.type === "customer.subscription.updated" ||
-      event.type === "customer.subscription.deleted"
-    ) {
-      await syncStripeSubscription(event.data.object);
-    } else if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      if (session.subscription) {
-        const subscription = await stripe.subscriptions.retrieve(
-          String(session.subscription),
-        );
-        await syncStripeSubscription(subscription);
-      }
-    }
-    return res.status(200).json({ received: true });
-  } catch (error) {
-    console.error("Could not synchronize Stripe subscription webhook:", error);
-    return res
-      .status(500)
-      .json({ message: "Subscription synchronization failed." });
-  }
-};
-
-// 1. Create Checkout Session for Pro Plan
-router.post("/create-checkout-session", protect, async (req, res) => {
-  try {
-    if (!process.env.STRIPE_SECRET_KEY) {
-      return res.status(400).json({
-        message: "Stripe API Key missing on server.",
-      });
-    }
-
-    const { billingCycle, trialDays } = req.body;
-    const user = await User.findById(req.user._id);
-    if (!user) return res.status(404).json({ message: "User not found." });
-    await normalizeSubscription(user);
-    if (user.subscriptionTier === "pro" && user.isPro) {
-      return res.status(409).json({
-        message: "Your Pro subscription is already active.",
-      });
-    }
-
-    const startTrial = Number(trialDays) === 3;
-    if (trialDays != null && !startTrial) {
-      return res.status(400).json({ message: "Unsupported trial duration." });
-    }
-    if (startTrial && user.trialUsedAt) {
-      return res.status(409).json({
-        code: "TRIAL_ALREADY_USED",
-        message: "The free trial has already been used for this account.",
-      });
-    }
-
-    const isYearly = billingCycle === "yearly";
-    const unitAmount = isYearly ? 9900 : 999; // $99/yr or $9.99/mo
-    const interval = isYearly ? "year" : "month";
-
-    const serverUrl = (
-      process.env.SERVER_URL || `${req.protocol}://${req.get("host")}`
-    ).replace(/\/$/, "");
-
-    // Strictly ensure only ONE parameter is passed to Stripe
-    const checkoutPayload = {
-      payment_method_types: ["card"],
-      mode: "subscription",
-      line_items: [
-        {
-          price_data: {
-            currency: "usd",
-            product_data: {
-              name: `NutriMorph App Pro (${isYearly ? "Yearly" : "Monthly"})`,
-              description: "Unlimited AI Chat, Camera Scanner & Analytics",
-              metadata: { brand: "NutriMorph App" },
-            },
-            unit_amount: unitAmount,
-            recurring: { interval: interval },
-          },
-          quantity: 1,
-        },
-      ],
-      client_reference_id: String(req.user._id),
-      metadata: {
-        userId: String(req.user._id),
-        billingCycle: isYearly ? "yearly" : "monthly",
-        trialDays: startTrial ? "3" : "0",
-        brand: "NutriMorph App",
-      },
-      subscription_data: {
-        ...(startTrial ? { trial_period_days: 3 } : {}),
-        metadata: {
-          userId: String(req.user._id),
-          trialDays: startTrial ? "3" : "0",
-          brand: "NutriMorph App",
-        },
-      },
-      success_url: `${serverUrl}/api/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${serverUrl}/api/payment/cancel`,
-    };
-
-    // Strict single condition check
-    if (user.stripeCustomerId && user.stripeCustomerId.trim() !== "") {
-      checkoutPayload.customer = user.stripeCustomerId;
-    } else if (user.email) {
-      checkoutPayload.customer_email = user.email;
-    }
-
-    const session = await stripe.checkout.sessions.create(checkoutPayload);
-
-    res.json({ success: true, url: session.url, id: session.id });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// 2. Success Redirect (MongoDB Auto Update & Redirect to Web App)
-router.get("/success", async (req, res) => {
-  try {
-    const { session_id: sessionId } = req.query;
-    if (!sessionId) {
-      return res.status(400).send("Checkout session is missing.");
-    }
-    const session = await stripe.checkout.sessions.retrieve(String(sessionId), {
-      expand: ["subscription"],
+let billingIndexesPromise;
+const ensureBillingIndexes = () => {
+  if (!billingIndexesPromise) {
+    billingIndexesPromise = Promise.all([
+      ProcessedPaddleEvent.createIndexes(),
+      PaddleCheckoutIntent.createIndexes(),
+      PaddleTransaction.createIndexes(),
+      PaddlePayout.createIndexes(),
+    ]).catch((error) => {
+      billingIndexesPromise = null;
+      throw error;
     });
-    const userId = session.client_reference_id || session.metadata?.userId;
-    const subscriptionStatus = session.subscription?.status;
-    if (
-      session.mode !== "subscription" ||
-      !["paid", "no_payment_required"].includes(session.payment_status) ||
-      !userId ||
-      !["active", "trialing"].includes(subscriptionStatus)
-    ) {
-      return res.redirect(
-        `${(process.env.FRONTEND_URL || process.env.CLIENT_URL || "https://nutrimorph.app").replace(/\/$/, "")}/?payment=failed`,
-      );
+  }
+  return billingIndexesPromise;
+};
+
+const getPriceId = (billingCycle) =>
+  process.env[
+    billingCycle === "yearly"
+      ? "PADDLE_PRICE_ID_YEARLY"
+      : "PADDLE_PRICE_ID_MONTHLY"
+  ];
+
+const getItemPriceIds = (items = []) =>
+  items.map((item) => item?.price?.id).filter(Boolean);
+
+const getCustomIntentId = (entity) => {
+  const value = entity?.customData?.checkoutIntentId;
+  return typeof value === "string" ? value : null;
+};
+
+const getIntentAndUser = async (entity, subscriptionId) => {
+  const intentId = getCustomIntentId(entity);
+  if (intentId) {
+    const intent = await PaddleCheckoutIntent.findOne({ intentId });
+    if (intent) {
+      const user = await User.findById(intent.userId);
+      if (user) return { intent, user };
     }
-    const subscription = session.subscription;
-    const user = await User.findByIdAndUpdate(
-      userId,
+  }
+  if (subscriptionId) {
+    const user = await User.findOne({
+      paddleSubscriptionId: String(subscriptionId),
+    });
+    if (user) return { intent: null, user };
+  }
+  return { intent: null, user: null };
+};
+
+const updateSubscriptionState = async (
+  subscription,
+  event,
+  { forceRevoke = false, statusOverride } = {},
+) => {
+  const { intent, user } = await getIntentAndUser(
+    subscription,
+    subscription.id,
+  );
+  if (!user) return;
+  if (
+    user.paddleSubscriptionId &&
+    user.paddleSubscriptionId !== subscription.id &&
+    isProUser(user)
+  ) {
+    return;
+  }
+
+  const priceIds = getItemPriceIds(subscription.items);
+  const expectedPriceId = intent?.priceId || user.paddlePriceId;
+  if (!expectedPriceId || !priceIds.includes(expectedPriceId)) return;
+
+  const paddle = getPaddleClient();
+  const customer = await paddle.customers.get(subscription.customerId);
+  if (String(customer.email || "").toLowerCase() !== user.email.toLowerCase()) {
+    throw new Error("Paddle subscription customer does not match the account.");
+  }
+
+  const eventAt = new Date(event.occurredAt);
+  const periodEnd = subscription.currentBillingPeriod?.endsAt
+    ? new Date(subscription.currentBillingPeriod.endsAt)
+    : null;
+  const status = statusOverride || subscription.status;
+  const stillPaidThroughPeriod =
+    status === "active" && periodEnd && periodEnd.getTime() > Date.now();
+  const shouldRevoke =
+    forceRevoke ||
+    status === "canceled" ||
+    status === "past_due" ||
+    status === "paused" ||
+    !stillPaidThroughPeriod;
+
+  const update = {
+    paddleCustomerId: subscription.customerId,
+    paddleSubscriptionId: subscription.id,
+    paddlePriceId: expectedPriceId,
+    subscriptionStatus: status,
+    subscriptionExpiresAt: periodEnd,
+    trialStartDate: null,
+    trialEndDate: null,
+  };
+  if (shouldRevoke) {
+    update.subscriptionTier = "free";
+    update.isPro = false;
+  }
+
+  const orderingFilter = Number.isFinite(eventAt.getTime())
+    ? {
+        _id: user._id,
+        $or: [
+          { paddleLastEventAt: { $exists: false } },
+          { paddleLastEventAt: null },
+          { paddleLastEventAt: { $lte: eventAt } },
+        ],
+      }
+    : { _id: user._id };
+  await User.findOneAndUpdate(
+    orderingFilter,
+    {
+      $set: update,
+      ...(Number.isFinite(eventAt.getTime())
+        ? { $max: { paddleLastEventAt: eventAt } }
+        : {}),
+    },
+    { new: true, runValidators: true },
+  );
+
+  if (intent && !intent.subscriptionId) {
+    await PaddleCheckoutIntent.updateOne(
+      { _id: intent._id, subscriptionId: null },
+      { $set: { subscriptionId: subscription.id } },
+    );
+  }
+};
+
+const verifyTransactionAndGrant = async (transaction, paddle, event) => {
+  if (transaction.status !== "completed" || !transaction.subscriptionId) return;
+
+  const intentId = getCustomIntentId(transaction);
+  let intent = intentId
+    ? await PaddleCheckoutIntent.findOne({ intentId })
+    : null;
+  if (
+    intent?.transactionId &&
+    intent.transactionId !== String(transaction.id)
+  ) {
+    intent = null;
+  }
+  let user = intent ? await User.findById(intent.userId) : null;
+  const itemPriceIds = getItemPriceIds(transaction.items);
+
+  if (intent && user) {
+    if (
+      (!intent.transactionId && intent.expiresAt.getTime() < Date.now()) ||
+      !itemPriceIds.includes(intent.priceId) ||
+      itemPriceIds.length !== 1 ||
+      transaction.items[0]?.quantity !== 1
+    ) {
+      throw new Error("Completed Paddle transaction does not match its checkout intent.");
+    }
+  } else {
+    intent = null;
+    user = await User.findOne({
+      paddleSubscriptionId: String(transaction.subscriptionId),
+    });
+    if (
+      !user ||
+      !user.paddlePriceId ||
+      !itemPriceIds.includes(user.paddlePriceId)
+    ) {
+      return;
+    }
+  }
+
+  if (!user || user.deactivatedAt) return;
+  const customer = transaction.customerId
+    ? await paddle.customers.get(transaction.customerId)
+    : null;
+  if (
+    !customer ||
+    String(customer.email || "").toLowerCase() !== user.email.toLowerCase() ||
+    (intent && intent.email !== user.email.toLowerCase())
+  ) {
+    throw new Error("Paddle transaction customer does not match the account.");
+  }
+
+  const subscription = await paddle.subscriptions.get(
+    String(transaction.subscriptionId),
+  );
+  if (
+    subscription.status !== "active" ||
+    subscription.customerId !== transaction.customerId ||
+    !getItemPriceIds(subscription.items).includes(
+      intent?.priceId || user.paddlePriceId || itemPriceIds[0],
+    )
+  ) {
+    return;
+  }
+
+  const amount = Number(transaction.details?.totals?.total);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Paddle completed transaction has no positive paid total.");
+  }
+
+  const transactionId = String(transaction.id);
+  const eventAt = new Date(event.occurredAt);
+  const periodEnd = transaction.billingPeriod?.endsAt
+    ? new Date(transaction.billingPeriod.endsAt)
+    : subscription.currentBillingPeriod?.endsAt
+      ? new Date(subscription.currentBillingPeriod.endsAt)
+      : null;
+
+  if (intent) {
+    const claimedIntent = await PaddleCheckoutIntent.findOneAndUpdate(
       {
-        subscriptionTier: "pro",
-        isPro: true,
-        subscriptionStatus,
-        subscriptionExpiresAt: subscription.current_period_end
-          ? new Date(subscription.current_period_end * 1000)
-          : null,
-        trialStartDate: subscription.trial_start
-          ? new Date(subscription.trial_start * 1000)
-          : undefined,
-        trialEndDate: subscription.trial_end
-          ? new Date(subscription.trial_end * 1000)
-          : null,
-        ...(subscription.customer
-          ? { stripeCustomerId: String(subscription.customer) }
-          : {}),
-        stripeSubscriptionId: String(subscription.id),
-        ...(session.metadata?.trialDays === "3"
-          ? { trialUsedAt: new Date() }
-          : {}),
+        _id: intent._id,
+        $or: [
+          { transactionId: null },
+          { transactionId },
+        ],
+        ...(intent.transactionId ? {} : { expiresAt: { $gte: new Date() } }),
+      },
+      {
+        $set: {
+          transactionId,
+          subscriptionId: String(transaction.subscriptionId),
+          completedAt: new Date(),
+        },
       },
       { new: true },
     );
-    if (!user) return res.status(404).send("Account not found.");
-    const appUrl = (
-      process.env.FRONTEND_URL ||
-      process.env.CLIENT_URL ||
-      "https://nutrimorph.app"
-    ).replace(/\/$/, "");
-    res.redirect(`${appUrl}/?payment=success`);
-  } catch (error) {
-    res.status(500).send("Database Update Failed");
-  }
-});
-
-// 3. Cancel Route
-router.get("/cancel", (req, res) => {
-  const appUrl = (
-    process.env.FRONTEND_URL ||
-    process.env.CLIENT_URL ||
-    "https://nutrimorph.app"
-  ).replace(/\/$/, "");
-  res.redirect(`${appUrl}/?payment=cancelled`);
-});
-
-// 4. Direct Verify Route
-router.post("/verify-payment", protect, async (req, res) => {
-  try {
-    let user = await User.findById(req.user._id);
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    if (user.stripeSubscriptionId && process.env.STRIPE_SECRET_KEY) {
-      const subscription = await stripe.subscriptions.retrieve(
-        user.stripeSubscriptionId,
-      );
-      user =
-        (await syncStripeSubscription(subscription)) ||
-        (await User.findById(req.user._id));
+    if (!claimedIntent) {
+      throw new Error("Checkout intent has already been used by another transaction.");
     }
-    await normalizeSubscription(user);
-    user.password = undefined;
-    return res.json({
+  }
+
+  await PaddleTransaction.updateOne(
+    { transactionId },
+    {
+      $setOnInsert: {
+        transactionId,
+        userId: user._id,
+        subscriptionId: String(transaction.subscriptionId),
+        amount,
+        currency: String(transaction.currencyCode || "usd").toLowerCase(),
+        paidAt: new Date(transaction.billedAt || event.occurredAt),
+      },
+    },
+    { upsert: true },
+  );
+
+  const expectedPriceId = intent?.priceId || user.paddlePriceId;
+  const update = {
+    subscriptionTier: "pro",
+    isPro: true,
+    subscriptionStatus: "active",
+    subscriptionExpiresAt: periodEnd,
+    paddleCustomerId: transaction.customerId,
+    paddleSubscriptionId: String(transaction.subscriptionId),
+    paddlePriceId: expectedPriceId,
+    trialStartDate: null,
+    trialEndDate: null,
+  };
+  await User.findOneAndUpdate(
+    { _id: user._id },
+    {
+      $set: update,
+      ...(Number.isFinite(eventAt.getTime())
+        ? { $max: { paddleLastEventAt: eventAt } }
+        : {}),
+    },
+    { new: true, runValidators: true },
+  );
+};
+
+const processPaddleEvent = async (event, paddle) => {
+  const data = event.data;
+  if (["payout.created", "payout.paid"].includes(event.eventType)) {
+    const eventAt = new Date(event.occurredAt);
+    const payoutFields = {
+      status: data.status || (event.eventType === "payout.paid" ? "paid" : "unpaid"),
+      remittanceReference: data.remittanceReference || null,
+      amount: Number(data.amount),
+      currencyCode: String(data.currencyCode || "usd").toLowerCase(),
+      lastEventAt: eventAt,
+    };
+    if (!Number.isFinite(payoutFields.amount)) {
+      throw new Error("Paddle payout event has an invalid amount.");
+    }
+    try {
+      await PaddlePayout.updateOne(
+        {
+          paddlePayoutId: String(data.id),
+          $or: [
+            { lastEventAt: { $exists: false } },
+            { lastEventAt: { $lte: eventAt } },
+          ],
+        },
+        {
+          $set: payoutFields,
+          $setOnInsert: { paddlePayoutId: String(data.id) },
+        },
+        { upsert: true },
+      );
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+    }
+    return;
+  }
+
+  if (event.eventType === "transaction.completed") {
+    await verifyTransactionAndGrant(data, paddle, event);
+    return;
+  }
+
+  if (event.eventType.startsWith("subscription.")) {
+    await updateSubscriptionState(data, event, {
+      forceRevoke: ["subscription.canceled", "subscription.paused"].includes(
+        event.eventType,
+      ),
+    });
+    return;
+  }
+
+  if (
+    ["transaction.payment_failed", "transaction.past_due"].includes(
+      event.eventType,
+    ) &&
+    data.subscriptionId
+  ) {
+    const subscription = await paddle.subscriptions.get(data.subscriptionId);
+    await updateSubscriptionState(subscription, event, {
+      forceRevoke: true,
+      statusOverride: "past_due",
+    });
+  }
+};
+
+const handlePaddleWebhook = async (req, res) => {
+  let event;
+  let paddle;
+  try {
+    assertPaddleConfigured();
+    paddle = getPaddleClient();
+    const signature = req.headers["paddle-signature"];
+    if (typeof signature !== "string" || !Buffer.isBuffer(req.body)) {
+      return res.status(400).json({ message: "Invalid Paddle webhook request." });
+    }
+    event = await paddle.webhooks.unmarshal(
+      req.body.toString("utf8"),
+      process.env.PADDLE_WEBHOOK_SECRET,
+      signature,
+    );
+  } catch (error) {
+    const configured = /not configured|PADDLE_ENV/i.test(error.message || "");
+    return res.status(configured ? 503 : 400).json({ message: error.message });
+  }
+
+  if (!event.eventId || !event.eventType || !event.data) {
+    return res.status(400).json({ message: "Invalid Paddle event payload." });
+  }
+
+  try {
+    await connectDB();
+    await ensureBillingIndexes();
+    await ProcessedPaddleEvent.create({ eventId: event.eventId });
+  } catch (error) {
+    if (error.code !== 11000) {
+      console.error("Could not claim Paddle webhook event:", error);
+      return res.status(500).json({ message: "Webhook event could not be recorded." });
+    }
+
+    let existing;
+    let reclaimed;
+    try {
+      reclaimed = await ProcessedPaddleEvent.findOneAndUpdate(
+        {
+          eventId: event.eventId,
+          processedAt: { $exists: false },
+          updatedAt: { $lte: new Date(Date.now() - 5 * 60 * 1000) },
+        },
+        { $set: { updatedAt: new Date() } },
+        { new: true },
+      ).select("eventId");
+      existing = await ProcessedPaddleEvent.findOne({
+        eventId: event.eventId,
+      }).select("processedAt");
+    } catch (lookupError) {
+      console.error("Could not inspect Paddle webhook state:", lookupError);
+      return res.status(500).json({ message: "Webhook event state could not be checked." });
+    }
+    if (existing?.processedAt) {
+      return res.status(200).json({ received: true, duplicate: true });
+    }
+    if (!reclaimed) {
+      return res.status(409).json({ message: "Webhook event is being processed." });
+    }
+  }
+
+  try {
+    await processPaddleEvent(event, paddle);
+    await ProcessedPaddleEvent.updateOne(
+      { eventId: event.eventId },
+      { $set: { processedAt: new Date() } },
+    );
+    return res.status(200).json({ received: true });
+  } catch (error) {
+    await ProcessedPaddleEvent.deleteOne({
+      eventId: event.eventId,
+      processedAt: { $exists: false },
+    });
+    console.error("Could not synchronize Paddle webhook:", error);
+    return res.status(500).json({ message: "Paddle event synchronization failed." });
+  }
+};
+
+router.post("/create-checkout-intent", protect, async (req, res) => {
+  try {
+    assertPaddleConfigured();
+    assertPaddlePricesConfigured();
+    await connectDB();
+    await ensureBillingIndexes();
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: "User not found." });
+    if (user.deactivatedAt) {
+      return res.status(403).json({ message: "Reactivate your account to subscribe." });
+    }
+    if (isProUser(user)) {
+      return res.status(409).json({ message: "Your Pro subscription is already active." });
+    }
+
+    const billingCycle = req.body?.billingCycle;
+    if (!["monthly", "yearly"].includes(billingCycle)) {
+      return res.status(400).json({ message: "Choose a valid billing cycle." });
+    }
+    const priceId = getPriceId(billingCycle);
+    if (!priceId || !/^pri_[A-Za-z0-9_]+$/.test(priceId)) {
+      throw new Error(`A valid PADDLE_PRICE_ID_${billingCycle.toUpperCase()} is required.`);
+    }
+
+    const intentId = crypto.randomUUID();
+    const intent = await PaddleCheckoutIntent.create({
+      intentId,
+      userId: user._id,
+      email: user.email.toLowerCase(),
+      billingCycle,
+      priceId,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    });
+    return res.status(201).json({
       success: true,
-      user,
+      intentId: intent.intentId,
+      email: intent.email,
+      priceId: intent.priceId,
+      billingCycle: intent.billingCycle,
+      expiresAt: intent.expiresAt,
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    const status =
+      /not configured|required|PADDLE_ENV/i.test(error.message) ? 503 : 500;
+    return res.status(status).json({ message: error.message });
   }
 });
 
-// 5. Update / Switch Plan Route
-router.post("/update-plan", protect, async (req, res) => {
+router.post("/verify-payment", protect, async (req, res) => {
   try {
-    const { plan } = req.body;
-
-    if (plan && plan.toLowerCase() === "pro") {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Pro plan activation requires payment. Please use the checkout session.",
-      });
-    }
-
-    const user = await User.findById(req.user._id);
-    if (!user) {
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found." });
-    }
-
-    user.subscriptionTier = "free";
-    user.isPro = false;
-    user.subscriptionStatus = "free";
-    user.subscriptionExpiresAt = null;
-    user.trialEndDate = null;
-
-    await user.save();
-
-    res.json({
+    const user = await User.findById(req.user._id).select(
+      "subscriptionTier isPro subscriptionExpiresAt subscriptionStatus",
+    );
+    if (!user) return res.status(404).json({ message: "User not found." });
+    return res.json({
       success: true,
-      message: "Subscription successfully updated to Free Plan!",
-      user,
+      user: {
+        subscriptionTier: isProUser(user) ? "pro" : "free",
+        isPro: isProUser(user),
+        subscriptionExpiresAt: user.subscriptionExpiresAt,
+        subscriptionStatus: user.subscriptionStatus,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.post("/cancel-subscription", protect, async (req, res) => {
+  try {
+    assertPaddleConfigured();
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: "User not found." });
+    const cancellation = await syncUserCancellation(user, true);
+    return res.json({
+      success: true,
+      message: cancellation.scheduled
+        ? "Cancellation is scheduled for the end of the billing period."
+        : "No active Paddle subscription was found.",
+      currentPeriodEnd: cancellation.currentPeriodEnd,
       aiModel: GEMINI_MODEL,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    return res.status(503).json({ success: false, message: error.message });
   }
 });
 
-// 6. Downgrade / Switch to Free Plan
-router.post("/switch-to-free", protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id);
-    if (!user) return res.status(404).json({ message: "User not found" });
+router.post("/webhook", express.raw({ type: "application/json" }), handlePaddleWebhook);
 
-    user.subscriptionTier = "free";
-    user.isPro = false;
-    user.subscriptionStatus = "free";
-    user.subscriptionExpiresAt = null;
-    user.trialEndDate = null;
-    await user.save();
-
-    res.json({
-      success: true,
-      message: "Switched to Free Plan successfully!",
-      user,
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-router.handleStripeWebhook = handleStripeWebhook;
+router.handlePaddleWebhook = handlePaddleWebhook;
+router.syncUserCancellation = syncUserCancellation;
 module.exports = router;

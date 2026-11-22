@@ -7,6 +7,7 @@ const MealPlanSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    email: { type: String, lowercase: true, trim: true },
     goal: {
       type: String,
       enum: ["weight_loss", "muscle_gain", "maintenance"],

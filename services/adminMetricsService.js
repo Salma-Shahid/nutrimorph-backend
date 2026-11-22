@@ -1,9 +1,11 @@
 const axios = require("axios");
 const crypto = require("crypto");
 const fs = require("fs");
-const Stripe = require("stripe");
 const GeminiUsage = require("../models/GeminiUsage");
 const EmailUsage = require("../models/EmailUsage");
+const User = require("../models/User");
+const PaddleTransaction = require("../models/PaddleTransaction");
+const ProcessedPaddleEvent = require("../models/ProcessedPaddleEvent");
 
 const REQUEST_TIMEOUT_MS = 10000;
 const sinceDate = () => {
@@ -238,33 +240,36 @@ const getAtlasUsage = async () => {
   // Agar Atlas API keys configured nahi hain toh graceful fallback return karein
   if (!groupId || !publicKey || !privateKey) {
     return {
-      connected: true, // Database connection via Mongoose is working fine
+      connected: false,
       used: null,
       limit: null,
-      message: "MongoDB connected successfully via Mongoose runtime.",
+      message:
+        "MongoDB is used by the app, but Atlas usage metrics require MONGODB_ATLAS_GROUP_ID, MONGODB_ATLAS_PUBLIC_KEY, and MONGODB_ATLAS_PRIVATE_KEY.",
     };
   }
 
   try {
-    // Try fetching via Atlas API with a short timeout, fallback gracefully if blocked
     const [clustersResponse, processesResponse] = await Promise.all([
       atlasRequest(`/groups/${encodeURIComponent(groupId)}/clusters`),
       atlasRequest(`/groups/${encodeURIComponent(groupId)}/processes`),
     ]);
-    // ... baaki existing logic waise hi rehne dein
+    if (!clustersResponse.data || !processesResponse.data) {
+      throw new Error("MongoDB Atlas returned incomplete usage data.");
+    }
     return {
       connected: true,
       used: null,
       limit: null,
-      message: "MongoDB Atlas connected successfully.",
+      message:
+        "Atlas API access succeeded, but storage usage metrics are not available from the configured endpoints.",
     };
   } catch (error) {
-    // Agar IP block error (403) aaye toh bhi dashboard ko "connected" show karein kyunki Mongoose connection healthy hai
     return {
-      connected: true,
+      connected: false,
       used: null,
       limit: null,
-      message: "MongoDB connected successfully via Mongoose.",
+      message:
+        error.message || "MongoDB Atlas usage metrics could not be retrieved.",
     };
   }
 };
@@ -372,7 +377,7 @@ const getExpoBuildUsage = async () => {
     }
     const builds = app.builds || [];
     const startOfMonth = new Date(monthStart()).getTime();
-    let offset = 0;
+    let offset = 100;
 
     while (
       builds.length >= offset &&
@@ -454,84 +459,76 @@ const getExpoBuildUsage = async () => {
   }
 };
 
-const getStripeClient = () =>
-  process.env.STRIPE_SECRET_KEY
-    ? new Stripe(process.env.STRIPE_SECRET_KEY)
-    : null;
-
-const getStripeUsage = async () => {
-  const stripe = getStripeClient();
-  if (!stripe) {
+const getPaddleUsage = async () => {
+  const configured =
+    Boolean(process.env.PADDLE_API_KEY && process.env.PADDLE_WEBHOOK_SECRET) &&
+    /^pri_[A-Za-z0-9_]+$/.test(process.env.PADDLE_PRICE_ID_MONTHLY || "") &&
+    /^pri_[A-Za-z0-9_]+$/.test(process.env.PADDLE_PRICE_ID_YEARLY || "") &&
+    (process.env.NODE_ENV !== "production" ||
+      process.env.PADDLE_ENV === "production");
+  if (!configured) {
     return {
-      ...unavailable("STRIPE_SECRET_KEY is not configured."),
+      ...unavailable(
+        "Set Paddle API/webhook credentials, both monthly/yearly price IDs, and PADDLE_ENV=production for production billing.",
+      ),
       activeSubscriptions: null,
       transactionVolumeUSD: null,
-      activeWebhooks: null,
-      pendingWebhookEvents: null,
+      verifiedTransactions30d: null,
+      processedWebhookEvents30d: null,
     };
   }
   try {
-    const since = Math.floor(sinceDate().getTime() / 1000);
-    const [subscriptions, webhookEndpoints, events, charges] =
+    const since = sinceDate();
+    const [activeSubscriptions, sales, verifiedTransactions30d, processedWebhookEvents30d] =
       await Promise.all([
-        stripe.subscriptions
-          .list({ status: "all", limit: 100 })
-          .autoPagingToArray({ limit: 10000 }),
-        stripe.webhookEndpoints.list({ limit: 100 }),
-        stripe.events
-          .list({ limit: 100, created: { gte: since } })
-          .autoPagingToArray({ limit: 10000 }),
-        stripe.charges
-          .list({ limit: 100, created: { gte: since }, paid: true })
-          .autoPagingToArray({ limit: 10000 }),
+        User.countDocuments({
+          isPro: true,
+          subscriptionExpiresAt: { $gt: new Date() },
+        }),
+        PaddleTransaction.aggregate([
+          { $match: { currency: "usd", paidAt: { $gte: since } } },
+          { $group: { _id: null, total: { $sum: "$amount" } } },
+        ]),
+        PaddleTransaction.countDocuments({ paidAt: { $gte: since } }),
+        ProcessedPaddleEvent.countDocuments({
+          processedAt: { $gte: since },
+        }),
       ]);
-    const activeSubscriptions = subscriptions.filter((subscription) =>
-      ["active", "trialing"].includes(subscription.status),
-    ).length;
-    const pendingWebhookEvents = events.filter(
-      (event) => Number(event.pending_webhooks) > 0,
-    ).length;
-    const transactionVolumeUSD =
-      charges
-        .filter((charge) => charge.currency === "usd")
-        .reduce((sum, charge) => sum + charge.amount, 0) / 100;
-    const activeWebhooks = webhookEndpoints.data.filter(
-      (endpoint) => endpoint.status === "enabled",
-    ).length;
     return {
       connected: true,
       activeSubscriptions,
-      transactionVolumeUSD,
-      activeWebhooks,
-      pendingWebhookEvents,
+      transactionVolumeUSD: sales[0]?.total || 0,
+      verifiedTransactions30d,
+      processedWebhookEvents30d,
+      activeWebhooks: null,
       message:
-        "Live Stripe subscriptions, charges, events, and webhook endpoints.",
+        "Billing metrics and payout statuses come from verified Paddle webhooks. Confirm payout destination and bank receipt with Paddle and your financial institution.",
     };
   } catch (error) {
     return {
-      ...unavailable(error.message || "Stripe metrics could not be retrieved."),
+      ...unavailable(error.message || "Paddle metrics could not be retrieved."),
       activeSubscriptions: null,
       transactionVolumeUSD: null,
-      activeWebhooks: null,
-      pendingWebhookEvents: null,
+      verifiedTransactions30d: null,
+      processedWebhookEvents30d: null,
     };
   }
 };
 
 const getAdminMetrics = async () => {
-  const [resend, gemini, atlas, cloudinary, expo, stripe] = await Promise.all([
+  const [resend, gemini, atlas, cloudinary, expo, paddle] = await Promise.all([
     getResendUsage(),
     getGeminiUsage(),
     getAtlasUsage(),
     getCloudinaryUsage(),
     getExpoBuildUsage(),
-    getStripeUsage(),
+    getPaddleUsage(),
   ]);
-  return { resend, gemini, atlas, cloudinary, expo, stripe };
+  return { resend, gemini, atlas, cloudinary, expo, paddle };
 };
 
 module.exports = {
   getAdminMetrics,
-  getStripeUsage,
+  getPaddleUsage,
   getExpoBuildUsage,
 };

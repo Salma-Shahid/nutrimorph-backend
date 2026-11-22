@@ -7,6 +7,7 @@ const waterSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    email: { type: String, lowercase: true, trim: true },
     date: {
       type: String, // Format: YYYY-MM-DD
       required: true,
@@ -14,6 +15,7 @@ const waterSchema = new mongoose.Schema(
     glasses: {
       type: Number,
       default: 0,
+      min: 0,
     },
   },
   { timestamps: true },

@@ -4,10 +4,19 @@ const Water = require("../models/Water");
 const User = require("../models/User"); //  User model imported for badge unlocking
 const { protect } = require("../middlewares/authMiddleware");
 
+const isValidDate = (value) =>
+  typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+
 // 1. GET Water Intake
 router.get("/", protect, async (req, res) => {
   try {
     const { date } = req.query;
+    if (!isValidDate(date)) {
+      return res.status(400).json({
+        success: false,
+        message: "A date in YYYY-MM-DD format is required.",
+      });
+    }
     const userId = req.user._id || req.user.id;
 
     let waterRecord = await Water.findOne({ userId, date });
@@ -25,13 +34,28 @@ router.get("/", protect, async (req, res) => {
 router.post("/", protect, async (req, res) => {
   try {
     const { date, glasses } = req.body;
+    const count = Number(glasses);
+    if (
+      !isValidDate(date) ||
+      !Number.isInteger(count) ||
+      count < 0 ||
+      count > 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Provide a valid date and a glass count between 0 and 100.",
+      });
+    }
     const userId = req.user._id || req.user.id;
 
     // 1. Update Water Record in DB
     const waterRecord = await Water.findOneAndUpdate(
       { userId, date },
-      { glasses },
-      { upsert: true, returnDocument: "after" },
+      {
+        $set: { glasses: count, email: req.user.email },
+        $setOnInsert: { userId, date },
+      },
+      { upsert: true, new: true, runValidators: true },
     );
 
     // 2.  Water Milestones Badge Checking Logic
@@ -39,7 +63,7 @@ router.post("/", protect, async (req, res) => {
     let newlyUnlocked = [];
 
     if (user) {
-      const totalMl = (glasses || 0) * 250; // 1 glass = 250ml
+      const totalMl = count * 250;
       const waterMilestones = [
         { ml: 1500, id: "water_1.5l" },
         { ml: 2500, id: "water_2.5l" },

@@ -29,6 +29,8 @@ const initCronJobs = require("./utils/cronJobs");
 const reviewRoutes = require("./routes/reviewRoutes");
 const exerciseRoutes = require("./routes/exerciseRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const weightRoutes = require("./routes/weightRoutes");
+const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const app = express();
 
 // Global CORS Configuration - Updated for Expo Web & Mobile Clients
@@ -61,6 +63,19 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options(/(.*)/, cors(corsOptions));
 
+app.use("/api", async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    console.error("API request could not connect to MongoDB:", error.message);
+    res.status(503).json({
+      success: false,
+      message: "Database is temporarily unavailable.",
+    });
+  }
+});
+
 // Database connection initialization
 connectDB().catch((err) => {
   console.error("MongoDB connection failed on startup:", err.message);
@@ -72,7 +87,7 @@ app.set("trust proxy", 1);
 app.post(
   "/api/payment/webhook",
   express.raw({ type: "application/json" }),
-  paymentRoutes.handleStripeWebhook,
+  paymentRoutes.handlePaddleWebhook,
 );
 
 app.use(express.json({ limit: "50mb" }));
@@ -94,6 +109,8 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/recipes", require("./routes/recipeRoutes.js"));
 app.use("/api/exercise", exerciseRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/weight", weightRoutes);
+app.use("/api/maintenance", maintenanceRoutes);
 app.get("/", (req, res) => {
   res.send("NutriMorph Backend Running...");
 });

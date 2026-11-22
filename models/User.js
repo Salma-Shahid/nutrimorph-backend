@@ -32,8 +32,12 @@ const userSchema = new mongoose.Schema(
     trialStartDate: { type: Date },
     trialEndDate: { type: Date },
     trialUsedAt: { type: Date },
-    stripeCustomerId: { type: String },
-    stripeSubscriptionId: { type: String },
+    paddleCustomerId: { type: String },
+    paddleSubscriptionId: { type: String },
+    paddlePriceId: { type: String },
+    paddleLastEventAt: { type: Date },
+    deactivatedAt: { type: Date, default: null },
+    deactivationExpiresAt: { type: Date, default: null },
 
     //  Free Limits Tracking
     dailyChatCount: { type: Number, default: 0 },

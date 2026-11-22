@@ -4,7 +4,6 @@ const router = express.Router();
 const {
   getAdminStats,
   getAllUsers,
-  updateUserTier,
   deleteUser,
   getRevenueStats,
   getAllReviews,
@@ -30,7 +29,6 @@ router.use(protect, requireAdmin);
 router.get("/stats", getAdminStats);
 router.get("/users", getAllUsers);
 router.get("/revenue", getRevenueStats); //  Added new route for revenue
-router.patch("/users/:id/tier", updateUserTier);
 router.delete("/users/:id", deleteUser);
 // Review moderation routes
 router.get("/reviews", getAllReviews);

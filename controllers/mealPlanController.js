@@ -5,7 +5,6 @@ const { z } = require("zod");
 const { callGeminiWithRetry } = require("../utils/aiHelper"); //  Retry Helper Import
 const { GEMINI_MODEL } = require("../config/ai");
 const isProUser = require("../utils/isProUser");
-const normalizeSubscription = require("../utils/normalizeSubscription");
 
 // 1. Zod Schema Definitions for AI Meal Plan Output Validation
 const MealItemSchema = z.object({
@@ -48,7 +47,6 @@ const generateMealPlan = async (req, res) => {
       });
     }
 
-    await normalizeSubscription(user);
     const { goal, dietType, targetCalories, duration = 3 } = req.body;
     const allowedDurations = [3, 5, 7, 15, 30];
     if (!Number.isInteger(Number(duration)) || !allowedDurations.includes(Number(duration))) {
@@ -155,6 +153,7 @@ JSON Schema:
     // Save validated plan to database
     const newMealPlan = await MealPlan.create({
       userId,
+      email: user.email,
       goal: validatedData.goal || goal || "weight_loss",
       dietType:
         validatedData.dietType || dietType || "Desi / Pakistani Standard",

@@ -7,8 +7,8 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { GEMINI_MODEL } = require("../config/ai");
 const { updateStreak } = require("../utils/streak");
 const isProUser = require("../utils/isProUser");
-const normalizeSubscription = require("../utils/normalizeSubscription");
 const recordGeminiUsage = require("../utils/recordGeminiUsage");
+const validateNutritionData = require("../utils/validateNutritionData");
 
 const getUtcDateKey = () => new Date().toISOString().slice(0, 10);
 
@@ -17,8 +17,6 @@ const reserveDailyScan = async (userId) => {
   if (!user) {
     return { status: 404, code: "USER_NOT_FOUND", message: "User not found." };
   }
-  await normalizeSubscription(user);
-
   const date = getUtcDateKey();
   if (isProUser(user)) {
     return {
@@ -64,7 +62,7 @@ const reserveDailyScan = async (userId) => {
     status: 403,
     code: "TRIAL_REQUIRED",
     message:
-      "Your free meal scan for today has been used. Start a 3-day free trial or upgrade to Pro for unlimited scans.",
+      "Your free meal scan for today has been used. Upgrade to Pro for unlimited scans.",
   };
 };
 
@@ -109,35 +107,31 @@ const analyzeMealText = async (req, res) => {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
       model: GEMINI_MODEL,
-      generationConfig: { temperature: 0.2 },
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: "application/json",
+      },
     });
 
-    const prompt = `You are a nutrition assistant. Calculate standard serving values for: "${text}".
+    const prompt = `You are a nutrition assistant. Estimate nutrition for one standard serving of: "${text}".
+If the serving size is unclear, use 100 g and state the assumption.
 Return the food name and all text in professional Standard English only. Do not use Urdu or Roman Urdu.
-Return ONLY a single valid JSON object with numbers for calories, protein, carbs, and fats. No markdown code blocks, no explanation text.
-JSON Schema:
+Calories are kcal; protein, carbohydrates, and fats are grams. Round calories to whole numbers and macros to one decimal. Return JSON only:
 {
   "name": "${text}",
+  "servingSize": "Serving description",
   "calories": 150,
   "protein": 12.5,
-  "carbs": 1.0,
-  "fats": 10.0
+  "carbs": 1,
+  "fats": 10
 }`;
 
     const result = await model.generateContent(prompt);
     await recordGeminiUsage(result);
-    let rawText = result.response.text();
-
-    if (!rawText || rawText.trim() === "") {
-      throw new Error("Gemini returned empty output");
-    }
-
-    rawText = rawText
-      .replace(/```json/gi, "")
-      .replace(/```/g, "")
-      .trim();
-
-    const nutritionData = JSON.parse(rawText);
+    const nutritionData = validateNutritionData(
+      result.response.text(),
+      text,
+    );
 
     return res.status(200).json({ success: true, data: nutritionData });
   } catch (error) {
@@ -359,6 +353,7 @@ const logMeal = async (req, res, next) => {
       protein,
       carbs,
       fats,
+      servingSize,
       date,
       mealType,
     } = req.body;
@@ -370,17 +365,34 @@ const logMeal = async (req, res, next) => {
       );
     }
 
+    const nutrition = {
+      calories: Number(calories ?? kcal),
+      protein: protein == null || protein === "" ? 0 : Number(protein),
+      carbs: carbs == null || carbs === "" ? 0 : Number(carbs),
+      fats: fats == null || fats === "" ? 0 : Number(fats),
+    };
+    if (
+      Object.values(nutrition).some(
+        (value) => !Number.isFinite(value) || value < 0,
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Calories and macros must be valid non-negative numbers.",
+      });
+    }
+
     const userLocalDate = date || new Date().toLocaleDateString("en-CA");
 
     // Create Meal entry with mealType
     const meal = await Meal.create({
       userId: userId,
       user: userId,
+      email: req.user.email,
       name: name || "Scanned Meal",
-      calories: Number(calories ?? kcal) || 0,
-      protein: Number(protein) || 0,
-      carbs: Number(carbs) || 0,
-      fats: Number(fats) || 0,
+      ...nutrition,
+      servingSize:
+        typeof servingSize === "string" ? servingSize.trim().slice(0, 120) : "",
       mealType: mealType || "Lunch",
       date: userLocalDate,
     });
@@ -468,10 +480,26 @@ const updateMeal = async (req, res) => {
     const { id } = req.params;
     const userId = req.user._id || req.user.id;
 
-    const { userId: _userId, user: _user, ...safeUpdates } = req.body;
+    const {
+      userId: _userId,
+      user: _user,
+      email: _email,
+      ...safeUpdates
+    } = req.body;
+    for (const field of ["calories", "protein", "carbs", "fats"]) {
+      if (safeUpdates[field] === undefined) continue;
+      const value = Number(safeUpdates[field]);
+      if (!Number.isFinite(value) || value < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Calories and macros must be valid non-negative numbers.",
+        });
+      }
+      safeUpdates[field] = value;
+    }
     const updatedMeal = await Meal.findOneAndUpdate(
       { _id: id, $or: [{ userId: userId }, { user: userId }] },
-      safeUpdates,
+      { ...safeUpdates, userId, user: userId, email: req.user.email },
       {
         new: true,
         runValidators: true,

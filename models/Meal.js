@@ -11,6 +11,7 @@ const MealSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+    email: { type: String, lowercase: true, trim: true },
     name: {
       type: String,
       required: true,
@@ -22,6 +23,7 @@ const MealSchema = new mongoose.Schema(
     protein: { type: Number, default: 0 },
     carbs: { type: Number, default: 0 },
     fats: { type: Number, default: 0 },
+    servingSize: { type: String, trim: true, maxlength: 120 },
 
     //  Standardized Meal Type Enum:
     mealType: {

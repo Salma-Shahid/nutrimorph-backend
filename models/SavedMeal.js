@@ -7,6 +7,8 @@ const savedMealSchema = new mongoose.Schema(
       ref: "User",
       required: false, // Global recipes do not require an owner.
     },
+    email: { type: String, lowercase: true, trim: true },
+    cuisine: { type: String, trim: true, index: true },
     isGlobal: {
       type: Boolean,
       default: false, // true = Available for all users in Explore Library
@@ -43,10 +45,10 @@ const savedMealSchema = new mongoose.Schema(
     protein: { type: Number, default: 0 },
     carbs: { type: Number, default: 0 },
     fats: { type: Number, default: 0 },
+    servingSize: { type: String, trim: true, maxlength: 120, default: "1 serving" },
     image: {
       type: String,
-      default:
-        "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=600",
+      default: "",
     },
     ingredients: [
       {

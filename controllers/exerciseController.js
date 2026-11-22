@@ -16,7 +16,10 @@ const getExerciseData = async (req, res, next) => {
     const userId = req.user._id;
 
     // Strict Query Isolation by User ID
-    let record = await Exercise.findOne({ user: userId, date });
+    let record = await Exercise.findOne({
+      $or: [{ userId }, { user: userId }],
+      date,
+    });
     if (!record) {
       record = { steps: 0, caloriesBurned: 0, exerciseName: "" };
     }
@@ -46,11 +49,13 @@ const logExerciseOrSteps = async (req, res, next) => {
 
     if (
       stepsTotal !== undefined &&
-      (!Number.isFinite(Number(stepsTotal)) || Number(stepsTotal) < 0)
+      (!Number.isInteger(Number(stepsTotal)) ||
+        Number(stepsTotal) < 0 ||
+        Number(stepsTotal) > 1000000)
     ) {
       return res.status(400).json({
         success: false,
-        message: "stepsTotal must be a non-negative number.",
+        message: "stepsTotal must be a whole number from 0 to 1,000,000.",
       });
     }
     if (
@@ -77,7 +82,10 @@ const logExerciseOrSteps = async (req, res, next) => {
 
     if (stepsDelta !== undefined) {
       const delta = Number(stepsDelta);
-      const query = { user: userId, date: logDate };
+      const query = {
+        $or: [{ userId }, { user: userId }],
+        date: logDate,
+      };
 
       // Safe find and update without aggregation pipeline to prevent 500 errors
       let record = await Exercise.findOne(query);
@@ -86,10 +94,15 @@ const logExerciseOrSteps = async (req, res, next) => {
 
       if (record) {
         record.steps = newDailySteps;
+        record.userId = userId;
+        record.user = userId;
+        record.email = req.user.email;
         await record.save();
       } else {
         record = await Exercise.create({
+          userId,
           user: userId,
+          email: req.user.email,
           date: logDate,
           steps: newDailySteps,
           caloriesBurned: 0,
@@ -155,22 +168,30 @@ const logExerciseOrSteps = async (req, res, next) => {
     }
 
     // 1. Atomic Upsert for Daily Exercise Log Linked to Logged-in User
-    let record = await Exercise.findOne({ user: userId, date: logDate });
+    let record = await Exercise.findOne({
+      $or: [{ userId }, { user: userId }],
+      date: logDate,
+    });
     const previousDailySteps = Number(record?.steps) || 0;
 
     if (record) {
       if (stepsTotal !== undefined) {
-        record.steps = Math.max(previousDailySteps, Number(stepsTotal));
+        record.steps = Number(stepsTotal);
       } else if (steps !== undefined) {
         record.steps += Number(steps);
       }
       if (caloriesBurned !== undefined)
         record.caloriesBurned += Number(caloriesBurned);
       if (exerciseName) record.exerciseName = exerciseName;
+      record.userId = userId;
+      record.user = userId;
+      record.email = req.user.email;
       await record.save();
     } else {
       record = await Exercise.create({
+        userId,
         user: userId,
+        email: req.user.email,
         date: logDate,
         steps:
           stepsTotal !== undefined
@@ -189,7 +210,7 @@ const logExerciseOrSteps = async (req, res, next) => {
       if (stepsTotal !== undefined) {
         user.steps =
           (Number(user.steps) || 0) +
-          Math.max(0, (Number(record.steps) || 0) - previousDailySteps);
+          ((Number(record.steps) || 0) - previousDailySteps);
       } else if (steps !== undefined) {
         user.steps = (Number(user.steps) || 0) + Number(steps);
       }

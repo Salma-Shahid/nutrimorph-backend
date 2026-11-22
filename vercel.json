@@ -16,6 +16,10 @@
     {
       "path": "/api/reviews/sync",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/maintenance/purge-deactivated",
+      "schedule": "0 * * * *"
     }
   ]
 }

@@ -2,11 +2,10 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
-const ChatMessage = require("../models/ChatMessage"); //  ChatMessage Model Import
 const sendEmail = require("../utils/sendEmail");
 const connectDB = require("../config/db");
 const isProUser = require("../utils/isProUser");
-const normalizeSubscription = require("../utils/normalizeSubscription");
+const { syncUserCancellation } = require("../services/paddleBilling");
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
@@ -172,7 +171,8 @@ const login = async (req, res) => {
   try {
     await connectDB();
 
-    const { email, password } = req.body;
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const { password } = req.body;
 
     const user = await User.findOne({ email });
     if (!user) {
@@ -183,7 +183,24 @@ const login = async (req, res) => {
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
-    await normalizeSubscription(user);
+    if (user.deactivatedAt) {
+      if (
+        !user.deactivationExpiresAt ||
+        user.deactivationExpiresAt.getTime() <= Date.now()
+      ) {
+        return res.status(410).json({
+          code: "ACCOUNT_GRACE_PERIOD_EXPIRED",
+          message: "The account recovery period has expired.",
+        });
+      }
+
+      if (user.paddleSubscriptionId) {
+        await syncUserCancellation(user, false);
+      }
+      user.deactivatedAt = null;
+      user.deactivationExpiresAt = null;
+      await user.save();
+    }
 
     // Email Verification Guard Check
     if (!user.isVerified) {
@@ -214,6 +231,8 @@ const login = async (req, res) => {
       macros: user.macros || user.macrosTarget,
       weight: user.weight,
       height: user.height,
+      bmi: user.bmi,
+      bmiCategory: user.bmiCategory,
       targetWeight: user.targetWeight,
       dailyCalorieTarget:
         user.dailyCalorieTarget || user.dailyCalorieGoal || user.dailyCalories,
@@ -330,7 +349,6 @@ const getMe = async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
-    await normalizeSubscription(user);
     const subscription = getSubscriptionStatus(user);
     res.status(200).json({
       success: true,
@@ -344,6 +362,11 @@ const getMe = async (req, res) => {
         subscriptionStatus: user.subscriptionStatus,
         trialEndDate: user.trialEndDate,
         trialUsedAt: user.trialUsedAt,
+        weight: user.weight,
+        height: user.height,
+        targetWeight: user.targetWeight,
+        bmi: user.bmi,
+        bmiCategory: user.bmiCategory,
         dailyChatCount: user.dailyChatCount,
         lastChatDate: user.lastChatDate,
         dailyScanCount: user.dailyScanCount,
@@ -418,6 +441,19 @@ const updateProfile = async (req, res) => {
     if (numHeight) user.height = numHeight;
     if (userGender) user.gender = userGender;
     if (userGoal) user.goal = userGoal;
+    if (numWeight > 0 && numHeight > 0) {
+      user.bmi = Number(
+        (numWeight / Math.pow(numHeight / 100, 2)).toFixed(1),
+      );
+      user.bmiCategory =
+        user.bmi < 18.5
+          ? "Underweight"
+          : user.bmi < 25
+            ? "Normal"
+            : user.bmi < 30
+              ? "Overweight"
+              : "Obese";
+    }
 
     let targetCalories = user.dailyCalories || user.dailyCalorieGoal || 2000;
     const manualCalorieGoal = calorieTarget || dailyCalorieGoal;
@@ -451,6 +487,7 @@ const updateProfile = async (req, res) => {
     const updatedUser = await user.save();
     const userResponse = updatedUser.toObject();
     delete userResponse.password;
+    Object.assign(userResponse, getSubscriptionStatus(updatedUser));
 
     res.status(200).json(userResponse);
   } catch (error) {
@@ -495,7 +532,6 @@ const completeOnboarding = async (req, res) => {
       carbsTarget,
       fatsTarget,
       medicalCondition,
-      bmi: providedBmi,
     } = req.body;
 
     let age = Number(providedAge) || user.age || 25;
@@ -531,12 +567,12 @@ const completeOnboarding = async (req, res) => {
       (typeof weightInput === "object" ? weightInput?.unit : null) || "kg";
     const weightInKg = weightUnit === "lbs" ? weightVal * 0.453592 : weightVal;
 
-    const bmi =
-      Number(providedBmi) ||
-      parseFloat((weightInKg / (heightInMeters * heightInMeters)).toFixed(1));
+    const bmi = parseFloat(
+      (weightInKg / (heightInMeters * heightInMeters)).toFixed(1),
+    );
     let bmiCategory = "Normal";
     if (bmi < 18.5) bmiCategory = "Underweight";
-    else if (bmi >= 25 && bmi < 29.9) bmiCategory = "Overweight";
+    else if (bmi >= 25 && bmi < 30) bmiCategory = "Overweight";
     else if (bmi >= 30) bmiCategory = "Obese";
 
     // 4. BMR Calculation (Mifflin-St Jeor)
@@ -602,6 +638,7 @@ const completeOnboarding = async (req, res) => {
     const updatedUser = await user.save();
     const userResponse = updatedUser.toObject();
     delete userResponse.password;
+    Object.assign(userResponse, getSubscriptionStatus(updatedUser));
 
     return res.status(200).json({
       success: true,
@@ -630,34 +667,44 @@ const deleteAccount = async (req, res) => {
       });
     }
 
-    // 1. Cascade delete all user chat history from MongoDB
-    await ChatMessage.deleteMany({
-      $or: [{ user: userId }, { userId: userId }],
-    });
-
-    // 2. Delete user profile record from MongoDB
-    const deletedUser = await User.findByIdAndDelete(userId);
-
-    if (!deletedUser) {
+    const user = await User.findById(userId);
+    if (!user) {
       return res.status(404).json({
         success: false,
         message: "User record not found.",
       });
     }
 
+    if (user.paddleSubscriptionId) {
+      await syncUserCancellation(user, true);
+    }
+
+    const deactivatedAt = new Date();
+    user.deactivatedAt = deactivatedAt;
+    user.deactivationExpiresAt = new Date(
+      deactivatedAt.getTime() + 30 * 24 * 60 * 60 * 1000,
+    );
+    await user.save();
+
     return res.status(200).json({
       success: true,
       message:
-        "Your account and all associated data have been permanently deleted.",
+        "Your account is deactivated and can be restored by signing in within 30 days.",
+      deactivationExpiresAt: user.deactivationExpiresAt,
     });
   } catch (error) {
     console.error("Delete Account Error:", error);
-    return res.status(500).json({
+    return res.status(userHasPaddleConfigError(error) ? 503 : 500).json({
       success: false,
       message: error.message || "Failed to delete account. Try again.",
     });
   }
 };
+
+const userHasPaddleConfigError = (error) =>
+  /PADDLE_API_KEY|PADDLE_WEBHOOK_SECRET|PADDLE_ENV|Paddle billing/i.test(
+    error?.message || "",
+  );
 
 module.exports = {
   register,

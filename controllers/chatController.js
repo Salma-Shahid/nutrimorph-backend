@@ -6,7 +6,6 @@ const { callGeminiWithRetry } = require("../utils/aiHelper");
 const { GEMINI_MODEL } = require("../config/ai");
 const mongoose = require("mongoose");
 const isProUser = require("../utils/isProUser");
-const normalizeSubscription = require("../utils/normalizeSubscription");
 
 const getUtcDayBounds = () => {
   const start = new Date();
@@ -46,7 +45,6 @@ const handleChat = async (req, res) => {
       });
     }
 
-    await normalizeSubscription(user);
     const currentTier = (user.subscriptionTier || "free").toLowerCase();
     const isFreeTier = !isProUser(user);
     const { start, end } = getUtcDayBounds();
@@ -164,6 +162,8 @@ STRICT INSTRUCTIONS:
     //  Save user & bot messages strictly bound to user._id
     const userMsgDoc = await ChatMessage.create({
       user: userId,
+      userId,
+      email: user.email,
       role: "user",
       sender: "user",
       text: message.trim(),
@@ -171,6 +171,8 @@ STRICT INSTRUCTIONS:
 
     const botMsgDoc = await ChatMessage.create({
       user: userId,
+      userId,
+      email: user.email,
       role: "bot",
       sender: "bot",
       text: responseText.trim(),

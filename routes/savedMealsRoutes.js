@@ -31,6 +31,10 @@ router.post("/", protect, async (req, res) => {
     const protein = req.body?.protein || 0;
     const carbs = req.body?.carbs || 0;
     const fats = req.body?.fats || 0;
+    const servingSize =
+      typeof req.body?.servingSize === "string"
+        ? req.body.servingSize.trim().slice(0, 120)
+        : "1 serving";
 
     if (!name || typeof name !== "string" || name.trim() === "") {
       return res
@@ -52,11 +56,13 @@ router.post("/", protect, async (req, res) => {
 
     const newMeal = new SavedMeal({
       userId,
+      email: req.user.email,
       name: trimmedName,
       calories: Number(calories) || 0,
       protein: Number(protein) || 0,
       carbs: Number(carbs) || 0,
       fats: Number(fats) || 0,
+      servingSize,
     });
 
     await newMeal.save();
