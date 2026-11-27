@@ -90,14 +90,68 @@ const userSchema = new mongoose.Schema(
     steps: { type: Number, default: 0 },
     streakCount: { type: Number, default: 0 },
     lastLoggedDate: { type: String, default: null },
+    // Longest streak ever; decides the Pro gem tier.
+    bestStreak: { type: Number, default: 0 },
     unlockedBadges: [
       {
         badgeId: { type: String, required: true },
         unlockedAt: { type: Date, default: Date.now },
       },
     ],
+
+    //  Gems & Streak Revive
+    gems: { type: Number, default: 0, min: 0 },
+    // "YYYY-MM" of the last monthly Pro gem grant (one grant per month).
+    gemsLastGrantMonth: { type: String, default: null },
+    gemsLastGrantTier: { type: String, default: null },
+    // Rewarded-ad gems claimed today (capped per day).
+    adRewardDate: { type: String, default: null },
+    adRewardCount: { type: Number, default: 0 },
+    // Snapshot taken when a streak resets, so it can still be revived after
+    // the user logs again on the day the break was detected.
+    lostStreak: { type: Number, default: 0 },
+    lostStreakOn: { type: String, default: null },
+    lostStreakMissedDays: { type: Number, default: 0 },
   },
   { timestamps: true },
 );
+
+const dayNumber = (value) => {
+  const time = Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(time) ? Math.round(time / 86400000) : null;
+};
+
+// Streaks are updated in several controllers; tracking here keeps best-streak
+// and broken-streak bookkeeping in one place.
+userSchema.post("init", function rememberStreak() {
+  this.$locals.previousStreak = Number(this.streakCount) || 0;
+  this.$locals.previousLastLoggedDate = this.lastLoggedDate || null;
+});
+
+userSchema.pre("save", function trackStreakChanges() {
+  const current = Number(this.streakCount) || 0;
+  if (current > (Number(this.bestStreak) || 0)) this.bestStreak = current;
+
+  const previous = this.$locals.previousStreak;
+  if (
+    this.isModified("streakCount") &&
+    current === 1 &&
+    Number(previous) >= 2 &&
+    this.lastLoggedDate &&
+    this.$locals.previousLastLoggedDate
+  ) {
+    const gap =
+      dayNumber(this.lastLoggedDate) -
+      dayNumber(this.$locals.previousLastLoggedDate) -
+      1;
+    if (Number.isFinite(gap) && gap >= 1) {
+      this.lostStreak = Number(previous);
+      this.lostStreakOn = this.lastLoggedDate;
+      this.lostStreakMissedDays = gap;
+    }
+  }
+  this.$locals.previousStreak = current;
+  this.$locals.previousLastLoggedDate = this.lastLoggedDate || null;
+});
 
 module.exports = mongoose.model("User", userSchema);

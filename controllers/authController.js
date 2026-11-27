@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const WeightEntry = require("../models/WeightEntry");
 const sendEmail = require("../utils/sendEmail");
 const connectDB = require("../config/db");
 const { getSubscriptionSnapshot } = require("../utils/isProUser");
@@ -200,6 +201,7 @@ const login = async (req, res) => {
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
+    let accountRestored = false;
     if (user.deactivatedAt) {
       if (
         !user.deactivationExpiresAt ||
@@ -216,6 +218,7 @@ const login = async (req, res) => {
       user.deactivatedAt = null;
       user.deactivationExpiresAt = null;
       await user.save();
+      accountRestored = true;
     }
 
     // Email Verification Guard Check
@@ -254,7 +257,12 @@ const login = async (req, res) => {
       medicalCondition: user.medicalCondition,
       unlockedBadges: user.unlockedBadges || [],
       steps: user.steps || 0,
+      streakCount: user.streakCount || 0,
+      bestStreak: user.bestStreak || 0,
+      gems: user.gems || 0,
       preferredMealsCount: user.preferredMealsCount || 4,
+      // True when this sign-in cancelled a pending account deletion.
+      accountRestored,
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -405,6 +413,8 @@ const getMe = async (req, res) => {
         steps: user.steps || 0,
         lastLoggedDate: user.lastLoggedDate || null,
         streakCount: user.streakCount || 0,
+        bestStreak: user.bestStreak || 0,
+        gems: user.gems || 0,
         isOnboarded: user.isOnboarded || user.isOnboardingCompleted,
         preferredMealsCount: user.preferredMealsCount || 4,
       },
@@ -454,6 +464,15 @@ const updateProfile = async (req, res) => {
     const numHeight = height !== undefined ? Number(height) : user.height;
     const userGender = gender || user.gender;
     const userGoal = goal || user.goal;
+    // The dashboard no longer has a separate weigh-in widget, so a changed
+    // profile weight is recorded as a weigh-in for the progress card.
+    const previousWeight = Number(user.weight) || 0;
+    const loggedWeightChange =
+      weight !== undefined &&
+      Number.isFinite(numWeight) &&
+      numWeight >= 15 &&
+      numWeight <= 500 &&
+      Math.abs(numWeight - previousWeight) >= 0.05;
 
     if (numAge) user.age = numAge;
     if (numWeight) user.weight = numWeight;
@@ -504,6 +523,15 @@ const updateProfile = async (req, res) => {
     user.isOnboarded = true;
 
     const updatedUser = await user.save();
+    if (loggedWeightChange) {
+      await WeightEntry.create({
+        userId: updatedUser._id,
+        email: updatedUser.email,
+        weight: numWeight,
+      }).catch((error) =>
+        console.error("Could not record profile weigh-in:", error.message),
+      );
+    }
     const userResponse = updatedUser.toObject();
     delete userResponse.password;
     Object.assign(userResponse, getSubscriptionStatus(updatedUser));
@@ -698,12 +726,28 @@ const deleteAccount = async (req, res) => {
       });
     }
 
+    // In-app confirmation step: the app re-asks for the password. Older app
+    // versions send no body, so the check applies only when it is provided.
+    const password = req.body?.password;
+    if (password !== undefined) {
+      const isMatch =
+        typeof password === "string" &&
+        password.length > 0 &&
+        (await bcrypt.compare(password, user.password));
+      if (!isMatch) {
+        return res.status(400).json({
+          success: false,
+          code: "INVALID_PASSWORD",
+          message: "That password is incorrect. Your account was not changed.",
+        });
+      }
+    }
+
     const notes = await deactivateUser(user);
 
     return res.status(200).json({
       success: true,
-      message:
-        "Your account is deactivated and can be restored by signing in within 30 days.",
+      message: `Your account is deactivated. All data will be permanently deleted on ${user.deactivationExpiresAt.toDateString()}. Sign in before then to restore it.`,
       deactivationExpiresAt: user.deactivationExpiresAt,
       notes,
     });

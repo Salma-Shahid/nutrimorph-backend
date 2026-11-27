@@ -87,27 +87,42 @@ const logExerciseOrSteps = async (req, res, next) => {
         date: logDate,
       };
 
-      // Safe find and update without aggregation pipeline to prevent 500 errors
-      let record = await Exercise.findOne(query);
-      const previousDailySteps = Number(record?.steps) || 0;
-      const newDailySteps = Math.max(0, previousDailySteps + delta);
-
-      if (record) {
-        record.steps = newDailySteps;
-        record.userId = userId;
-        record.user = userId;
-        record.email = req.user.email;
-        await record.save();
-      } else {
-        record = await Exercise.create({
-          userId,
-          user: userId,
-          email: req.user.email,
-          date: logDate,
-          steps: newDailySteps,
-          caloriesBurned: 0,
-          exerciseName: "",
-        });
+      // Atomic increment: concurrent deltas (device sync + manual adds from
+      // the app) always accumulate instead of overwriting each other.
+      let record = await Exercise.findOne(query).select("_id");
+      if (!record) {
+        try {
+          await Exercise.create({
+            userId,
+            user: userId,
+            email: req.user.email,
+            date: logDate,
+            steps: 0,
+            caloriesBurned: 0,
+            exerciseName: "",
+          });
+        } catch (createError) {
+          // A parallel request created today's record first; increment it.
+          if (createError.code !== 11000) throw createError;
+        }
+      }
+      record = await Exercise.findOneAndUpdate(
+        query,
+        {
+          $inc: { steps: delta },
+          $set: { userId, user: userId, email: req.user.email },
+        },
+        { new: true },
+      );
+      let previousDailySteps = (Number(record.steps) || 0) - delta;
+      if (record.steps < 0) {
+        // Never below zero (e.g. removing more steps than were logged).
+        record = await Exercise.findOneAndUpdate(
+          { _id: record._id, steps: { $lt: 0 } },
+          { $set: { steps: 0 } },
+          { new: true },
+        ) || record;
+        previousDailySteps = Math.max(0, previousDailySteps);
       }
 
       const actualDelta = Number(record.steps) - previousDailySteps;

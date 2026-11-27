@@ -6,6 +6,7 @@ const Exercise = require("../models/ExerciseModel");
 const MealPlan = require("../models/MealPlan");
 const SavedMeal = require("../models/SavedMeal");
 const WeightEntry = require("../models/WeightEntry");
+const GemTransaction = require("../models/GemTransaction");
 const connectDB = require("../config/db");
 
 const purgeDeactivatedUsers = async (now = new Date()) => {
@@ -27,6 +28,7 @@ const purgeDeactivatedUsers = async (now = new Date()) => {
       MealPlan.deleteMany({ userId }),
       SavedMeal.deleteMany({ userId, isGlobal: { $ne: true } }),
       WeightEntry.deleteMany({ userId }),
+      GemTransaction.deleteMany({ userId }),
     ]);
 
     const result = await User.deleteOne({

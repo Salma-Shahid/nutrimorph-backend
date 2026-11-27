@@ -31,6 +31,7 @@ const exerciseRoutes = require("./routes/exerciseRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const weightRoutes = require("./routes/weightRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
+const gemRoutes = require("./routes/gemRoutes");
 const app = express();
 
 // Global CORS Configuration - Updated for Expo Web & Mobile Clients
@@ -149,6 +150,7 @@ app.use("/api/exercise", exerciseRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/weight", weightRoutes);
 app.use("/api/maintenance", maintenanceRoutes);
+app.use("/api/gems", gemRoutes);
 app.get("/", (req, res) => {
   res.send("NutriMorph Backend Running...");
 });
