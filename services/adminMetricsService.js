@@ -669,6 +669,7 @@ const getAdminMetrics = async () => {
   const [resend, gemini, atlas, cloudinary, expo, paddle] = await Promise.all([
     getResendUsage(),
     getGeminiUsage(),
+    getDatabaseStatus(),
     getAtlasUsage(),
     getCloudinaryUsage(),
     getExpoBuildUsage(),
