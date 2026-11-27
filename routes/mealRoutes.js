@@ -5,7 +5,6 @@ const validateRequest = require("../middlewares/validateRequest");
 const { analyzeMealSchema } = require("../validators/mealValidator");
 const { aiLimiter } = require("../middlewares/rateLimiter");
 const { protect } = require("../middlewares/authMiddleware");
-const { checkPro } = require("../middlewares/checkPro");
 
 // 1. Daily & Weekly Summary GET Routes
 router.get("/summary", protect, mealController.getDailySummary);
@@ -37,7 +36,9 @@ router.post(
 );
 
 // 3. AI Text Parsing Route
-router.post("/parse-text", protect, checkPro, mealController.analyzeMealText);
+// Pro-only, except the barcode zero-macro fallback (`source: "barcode"`), which
+// spends a free user's daily scan. Gating is enforced in analyzeMealText.
+router.post("/parse-text", protect, mealController.analyzeMealText);
 router.post(
   "/recovery-guidance",
   protect,

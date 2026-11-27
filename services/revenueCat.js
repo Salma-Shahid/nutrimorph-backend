@@ -60,10 +60,16 @@ const readEntitlement = (subscriber, now = Date.now()) => {
     ? subscriber?.subscriptions?.[productId]
     : null;
 
+  const purchasedRaw =
+    subscription?.purchase_date || entitlement.purchase_date || null;
+  const purchasedAt = purchasedRaw ? new Date(purchasedRaw) : null;
+
   return {
     active,
     expiresAt,
     productId,
+    purchasedAt:
+      purchasedAt && Number.isFinite(purchasedAt.getTime()) ? purchasedAt : null,
     isTrial: subscription?.period_type === "trial",
     willRenew: subscription ? !subscription.unsubscribe_detected_at : null,
     store: subscription?.store || null,
@@ -87,6 +93,18 @@ const applyEntitlementToUser = async (userId, entitlement) => {
       billingProvider: "revenuecat",
       revenueCatProductId: entitlement.productId,
     });
+    if (entitlement.isTrial) {
+      // Store free trial (e.g. 3 days). trialUsedAt records first use only.
+      const trialStart = entitlement.purchasedAt || new Date();
+      Object.assign(update, {
+        trialStartDate: trialStart,
+        trialEndDate: entitlement.expiresAt,
+      });
+      if (!user.trialUsedAt) update.trialUsedAt = trialStart;
+    } else {
+      // Paid period (trial converted or no trial). trialUsedAt is kept.
+      Object.assign(update, { trialStartDate: null, trialEndDate: null });
+    }
   } else if (user.billingProvider === "revenuecat") {
     Object.assign(update, {
       subscriptionTier: "free",

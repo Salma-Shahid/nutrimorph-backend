@@ -674,8 +674,63 @@ const getPaddleUsage = async () => {
   }
 };
 
+// RevenueCat is the primary billing provider. Reports which server settings are
+// present (never their values) plus subscriber counts from our own database.
+const getRevenueCatStatus = async () => {
+  const secretKey = Boolean(process.env.REVENUECAT_SECRET_API_KEY?.trim());
+  const webhookAuth = Boolean(process.env.REVENUECAT_WEBHOOK_AUTH?.trim());
+  const entitlementId = (process.env.REVENUECAT_ENTITLEMENT_ID || "").trim();
+  const missing = [
+    !secretKey && "REVENUECAT_SECRET_API_KEY",
+    !webhookAuth && "REVENUECAT_WEBHOOK_AUTH",
+    !entitlementId && "REVENUECAT_ENTITLEMENT_ID",
+  ].filter(Boolean);
+
+  let activeSubscribers = null;
+  let activeTrials = null;
+  try {
+    const active = {
+      billingProvider: "revenuecat",
+      isPro: true,
+      deactivatedAt: null,
+      $or: [
+        { subscriptionExpiresAt: null },
+        { subscriptionExpiresAt: { $gt: new Date() } },
+      ],
+    };
+    [activeSubscribers, activeTrials] = await Promise.all([
+      User.countDocuments(active),
+      User.countDocuments({ ...active, subscriptionStatus: "trialing" }),
+    ]);
+  } catch {
+    // Counts are informational; configuration status is still reported.
+  }
+
+  // The secret key verifies purchases and the webhook keeps renewals and
+  // cancellations in sync. The entitlement ID falls back to "pro" on the
+  // server, so it is flagged (not failed) when unset: it must match the app.
+  const connected = secretKey && webhookAuth;
+  return {
+    connected,
+    primary: true,
+    checks: {
+      secretKey,
+      webhookAuth,
+      entitlementId: entitlementId || null,
+    },
+    missing,
+    activeSubscribers,
+    activeTrials,
+    message: connected
+      ? missing.length
+        ? 'RevenueCat is configured, but REVENUECAT_ENTITLEMENT_ID is unset (defaulting to "pro"). Set it to match the app.'
+        : "RevenueCat purchase verification and webhook are configured."
+      : `RevenueCat (primary billing) is missing: ${missing.join(", ")}.`,
+  };
+};
+
 const getAdminMetrics = async () => {
-  const [resend, gemini, database, atlas, cloudinary, expo, paddle] =
+  const [resend, gemini, database, atlas, cloudinary, expo, revenuecat, paddleRaw] =
     await Promise.all([
       getResendUsage(),
       getGeminiUsage(),
@@ -683,13 +738,17 @@ const getAdminMetrics = async () => {
       getAtlasUsage(),
       getCloudinaryUsage(),
       getExpoBuildUsage(),
+      getRevenueCatStatus(),
       getPaddleUsage(),
     ]);
-  return { resend, gemini, database, atlas, cloudinary, expo, paddle };
+  // Paddle is an optional legacy fallback; it never marks the platform unhealthy.
+  const paddle = { ...paddleRaw, optional: true, legacy: true };
+  return { resend, gemini, database, atlas, cloudinary, expo, revenuecat, paddle };
 };
 
 module.exports = {
   getAdminMetrics,
   getPaddleUsage,
+  getRevenueCatStatus,
   getExpoBuildUsage,
 };

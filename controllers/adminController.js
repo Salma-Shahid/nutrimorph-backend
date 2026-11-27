@@ -13,6 +13,7 @@ const {
 const {
   getAdminMetrics,
   getPaddleUsage,
+  getRevenueCatStatus,
   getExpoBuildUsage,
 } = require("../services/adminMetricsService");
 const { safeSyncUserCancellation } = require("../services/paddleBilling");
@@ -165,7 +166,7 @@ const updateUserSubscription = async (req, res, next) => {
         trialEndDate: null,
       });
     } else if (plan === "trial") {
-      const trialEnd = addDays(durationDays || 7);
+      const trialEnd = addDays(durationDays || 3);
       Object.assign(user, {
         subscriptionTier: "pro",
         isPro: true,
@@ -221,27 +222,49 @@ const updateUserSubscription = async (req, res, next) => {
 };
 
 // 5. Get Revenue Statistics
+// RevenueCat is the primary provider; Paddle is reported only as an optional
+// legacy fallback. Store revenue lives in the RevenueCat dashboard, so only
+// Paddle's verified volume is summed here.
 const getRevenueStats = async (req, res) => {
   try {
-    const paddle = await getPaddleUsage();
-    if (!paddle.connected) {
-      // Not configured yet (e.g. pending Paddle approval) is a state, not an error.
-      return res.status(200).json({
-        success: true,
-        configured: false,
-        data: null,
-        message: paddle.message,
-      });
-    }
+    const [revenueCat, paddle, activeSubscriptions] = await Promise.all([
+      getRevenueCatStatus(),
+      getPaddleUsage(),
+      User.countDocuments({
+        deactivatedAt: null,
+        role: { $ne: "admin" },
+        ...activeProFilter(),
+      }),
+    ]);
 
     res.status(200).json({
       success: true,
-      configured: true,
+      // "configured" follows the primary provider only.
+      configured: revenueCat.connected,
+      message: revenueCat.connected
+        ? revenueCat.missing.length
+          ? revenueCat.message
+          : null
+        : revenueCat.message,
       data: {
-        totalRevenue: paddle.transactionVolumeUSD,
-        activeSubscriptions: paddle.activeSubscriptions,
-        currency: "USD",
-        source: "Verified Paddle transactions",
+        primaryProvider: "revenuecat",
+        activeSubscriptions,
+        revenueCat: {
+          connected: revenueCat.connected,
+          missing: revenueCat.missing,
+          activeSubscribers: revenueCat.activeSubscribers,
+          activeTrials: revenueCat.activeTrials,
+          message: revenueCat.message,
+        },
+        paddle: {
+          connected: paddle.connected,
+          legacy: true,
+          totalRevenue: paddle.connected ? paddle.transactionVolumeUSD : null,
+          currency: "USD",
+          message: paddle.connected
+            ? "Verified Paddle transactions (last 30 days)."
+            : "Optional legacy fallback is not configured.",
+        },
       },
     });
   } catch (error) {
@@ -398,6 +421,7 @@ const getApiUsageStats = async (req, res) => {
           atlas: services.atlas,
           cloudinary: services.cloudinary,
           expo: services.expo,
+          revenuecat: services.revenuecat,
           paddle: services.paddle,
         },
       },
@@ -454,8 +478,11 @@ const cleanupDatabase = async (req, res) => {
 const syncServicesHealth = async (req, res) => {
   try {
     const services = await getAdminMetrics();
+    // Optional services (Atlas Admin API, legacy Paddle) never fail the check.
     const connected = Object.entries(services)
-      .filter(([name]) => !["gemini", "atlas"].includes(name))
+      .filter(
+        ([name, value]) => !["gemini", "atlas"].includes(name) && !value.optional,
+      )
       .every(([, value]) => value.connected);
     res.status(200).json({
       success: true,
@@ -501,7 +528,10 @@ const getExpoBuildsStatus = async (req, res) => {
 // Get Payment Gateway & Webhook Health Status
 const getGatewayHealth = async (req, res) => {
   try {
-    const paddle = await getPaddleUsage();
+    const [revenueCat, paddle] = await Promise.all([
+      getRevenueCatStatus(),
+      getPaddleUsage(),
+    ]);
     const [pendingWebhookEvents, payouts] = await Promise.all([
       ProcessedPaddleEvent.countDocuments({ processedAt: { $exists: false } }),
       PaddlePayout.find()
@@ -513,18 +543,32 @@ const getGatewayHealth = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        gatewayName: "Paddle Billing",
-        status: paddle.connected
-          ? pendingWebhookEvents > 0
+        gatewayName: "RevenueCat (primary)",
+        // Overall status follows the primary provider; Paddle backlog only
+        // matters when the legacy fallback is actually configured.
+        status: !revenueCat.connected
+          ? "Not configured"
+          : paddle.connected && pendingWebhookEvents > 0
             ? "Attention required"
-            : "Configured"
-          : "Not configured",
+            : "Configured",
+        revenueCat: {
+          connected: revenueCat.connected,
+          checks: revenueCat.checks,
+          missing: revenueCat.missing,
+          activeSubscribers: revenueCat.activeSubscribers,
+          activeTrials: revenueCat.activeTrials,
+          message: revenueCat.message,
+        },
+        paddleConfigured: paddle.connected,
         activeWebhooks: null,
         pendingWebhookEvents,
         totalTransactionVolumeUSD: paddle.transactionVolumeUSD,
         verifiedTransactions30d: paddle.verifiedTransactions30d,
         payouts,
-        message: paddle.message,
+        message: revenueCat.message,
+        paddleMessage: paddle.connected
+          ? paddle.message
+          : "Paddle (optional legacy fallback) is not configured.",
       },
     });
   } catch (error) {
@@ -532,20 +576,29 @@ const getGatewayHealth = async (req, res) => {
   }
 };
 
-// Report Paddle billing configuration without claiming that a webhook ping was performed.
+// Report billing configuration (RevenueCat primary, Paddle optional legacy)
+// without claiming that a webhook ping was performed.
 const testWebhookPing = async (req, res) => {
   try {
-    const paddle = await getPaddleUsage();
-    if (!paddle.connected) {
+    const [revenueCat, paddle] = await Promise.all([
+      getRevenueCatStatus(),
+      getPaddleUsage(),
+    ]);
+    const paddleNote = paddle.connected
+      ? " Paddle legacy fallback is also configured."
+      : " Paddle legacy fallback is not configured (optional).";
+    if (!revenueCat.connected) {
       return res.status(503).json({
         success: false,
-        message: paddle.message,
+        message: revenueCat.message + paddleNote,
       });
     }
     res.status(200).json({
       success: true,
       message:
-        "Paddle API and webhook signing credentials are configured. Confirm notification delivery and merchant payout details in Paddle.",
+        revenueCat.message +
+        " Send a test event from RevenueCat > Integrations > Webhooks to confirm delivery." +
+        paddleNote,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

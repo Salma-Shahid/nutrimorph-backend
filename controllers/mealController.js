@@ -80,9 +80,17 @@ const releaseDailyScan = async (userId, reservation) => {
 
 // Helper function to calculate streak
 // 1. AI Text Analysis
+// Free users may reach this only as the barcode zero-macro fallback
+// (`source: "barcode"`), which spends their free daily scan instead of
+// requiring Pro. All other text logging stays Pro-only.
+const BARCODE_FALLBACK_MAX_LENGTH = 150;
 const analyzeMealText = async (req, res) => {
+  const userId = req.user._id || req.user.id;
+  let scanUsage;
   try {
-    if (!isProUser(req.user)) {
+    const isBarcodeFallback = req.body?.source === "barcode";
+    const isPro = isProUser(req.user);
+    if (!isPro && !isBarcodeFallback) {
       return res.status(403).json({
         success: false,
         code: "PRO_REQUIRED",
@@ -91,10 +99,15 @@ const analyzeMealText = async (req, res) => {
     }
 
     const { text } = req.body;
-    if (!text || text.trim() === "") {
+    if (!text || typeof text !== "string" || text.trim() === "") {
       return res
         .status(400)
         .json({ success: false, message: "Food name required" });
+    }
+    if (isBarcodeFallback && text.length > BARCODE_FALLBACK_MAX_LENGTH) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Product name is too long." });
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
@@ -102,6 +115,17 @@ const analyzeMealText = async (req, res) => {
       return res
         .status(500)
         .json({ success: false, message: "Server API Key Missing" });
+    }
+
+    if (!isPro) {
+      scanUsage = await reserveDailyScan(userId);
+      if (!scanUsage.allowed) {
+        return res.status(scanUsage.status || 403).json({
+          success: false,
+          code: scanUsage.code || "TRIAL_REQUIRED",
+          message: scanUsage.message,
+        });
+      }
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
@@ -133,9 +157,26 @@ Calories are kcal; protein, carbohydrates, and fats are grams. Round calories to
       text,
     );
 
-    return res.status(200).json({ success: true, data: nutritionData });
+    return res.status(200).json({
+      success: true,
+      data: nutritionData,
+      ...(scanUsage
+        ? {
+            usage: {
+              dailyScanCount: scanUsage.count,
+              dailyScanDate: scanUsage.date,
+            },
+          }
+        : {}),
+    });
   } catch (error) {
     console.error("AI Text Analysis Parse Error:", error.message);
+    // A failed estimate must not cost a free user their daily scan.
+    try {
+      await releaseDailyScan(userId, scanUsage);
+    } catch (releaseError) {
+      console.error("Could not restore the free scan allowance:", releaseError);
+    }
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to analyze food text",
