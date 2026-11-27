@@ -488,8 +488,10 @@ router.get("/config", (req, res) => {
 // Verify the caller's RevenueCat entitlement server-side and sync Pro status.
 // The app user ID is always the authenticated user's ID, never a body value.
 router.post("/revenuecat/sync", protect, async (req, res) => {
+  // 503 = server-side setup problem (retrying won't help); 502 = RevenueCat
+  // temporarily failed (retry is fine). Both include the current snapshot.
   if (!revenueCat.isRevenueCatConfigured()) {
-    return res.status(200).json({
+    return res.status(503).json({
       success: false,
       code: "REVENUECAT_NOT_CONFIGURED",
       message:
@@ -502,18 +504,25 @@ router.post("/revenuecat/sync", protect, async (req, res) => {
     const { user, entitlement } = await revenueCat.syncUserFromRevenueCat(
       req.user._id,
     );
-    return res.json({
+    return res.status(200).json({
       success: true,
       entitlementActive: entitlement.active,
       willRenew: entitlement.willRenew,
       user: getSubscriptionSnapshot(user || req.user),
     });
   } catch (error) {
-    console.error(
-      "RevenueCat sync failed:",
-      error.response?.status || "",
-      error.message,
-    );
+    const upstreamStatus = error.response?.status;
+    console.error("RevenueCat sync failed:", upstreamStatus || "", error.message);
+    if (upstreamStatus === 401 || upstreamStatus === 403) {
+      // Wrong/revoked REVENUECAT_SECRET_API_KEY (or a public key used by mistake).
+      return res.status(503).json({
+        success: false,
+        code: "REVENUECAT_AUTH_FAILED",
+        message:
+          "Purchase received, but the server can't verify it yet. Pro will activate automatically once verification is restored.",
+        user: getSubscriptionSnapshot(req.user),
+      });
+    }
     return res.status(502).json({
       success: false,
       code: "REVENUECAT_SYNC_FAILED",
@@ -538,17 +547,30 @@ router.post("/create-checkout-intent", protect, async (req, res) => {
     await connectDB();
     await ensureBillingIndexes();
     const user = await User.findById(req.user._id);
-    if (!user) return res.status(404).json({ message: "User not found." });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found." });
+    }
     if (user.deactivatedAt) {
-      return res.status(403).json({ message: "Reactivate your account to subscribe." });
+      return res.status(403).json({
+        success: false,
+        code: "ACCOUNT_DEACTIVATED",
+        message: "Reactivate your account to subscribe.",
+      });
     }
     if (isProUser(user)) {
-      return res.status(409).json({ message: "Your Pro subscription is already active." });
+      return res.status(409).json({
+        success: false,
+        code: "ALREADY_PRO",
+        message: "Your Pro subscription is already active.",
+      });
     }
 
     const billingCycle = req.body?.billingCycle;
     if (!["monthly", "yearly"].includes(billingCycle)) {
-      return res.status(400).json({ message: "Choose a valid billing cycle." });
+      return res.status(400).json({
+        success: false,
+        message: "Choose a valid billing cycle (monthly or yearly).",
+      });
     }
     const priceId = getPriceId(billingCycle);
     if (!priceId || !/^pri_[A-Za-z0-9_]+$/.test(priceId)) {
@@ -573,9 +595,15 @@ router.post("/create-checkout-intent", protect, async (req, res) => {
       expiresAt: intent.expiresAt,
     });
   } catch (error) {
-    const status =
-      /not configured|required|PADDLE_ENV/i.test(error.message) ? 503 : 500;
-    return res.status(status).json({ message: error.message });
+    const configError = /not configured|required|PADDLE_ENV/i.test(error.message);
+    console.error("Could not create Paddle checkout intent:", error.message);
+    return res.status(configError ? 503 : 500).json({
+      success: false,
+      code: configError ? "PADDLE_NOT_CONFIGURED" : "CHECKOUT_INTENT_FAILED",
+      message: configError
+        ? "Web checkout is not available yet. Please subscribe from the NutriMorph mobile app."
+        : "Could not prepare checkout. Please try again.",
+    });
   }
 });
 
@@ -594,10 +622,12 @@ router.post("/verify-payment", protect, async (req, res) => {
 router.post("/cancel-subscription", protect, async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
-    if (!user) return res.status(404).json({ message: "User not found." });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found." });
+    }
     // Store subscriptions can only be cancelled by the user in the store.
     if (user.billingProvider === "revenuecat") {
-      return res.json({
+      return res.status(200).json({
         success: true,
         manageInStore: true,
         message:
@@ -605,15 +635,31 @@ router.post("/cancel-subscription", protect, async (req, res) => {
         manageUrl: "https://play.google.com/store/account/subscriptions",
       });
     }
-    if (!user.paddleSubscriptionId) {
-      return res.json({
+    if (user.billingProvider === "admin" && isProUser(user)) {
+      return res.status(200).json({
         success: true,
-        message: "No active Paddle subscription was found.",
+        message:
+          "Your Pro access was granted by NutriMorph support, so there is no subscription to cancel.",
       });
     }
-    assertPaddleConfigured();
+    if (!user.paddleSubscriptionId) {
+      return res.status(200).json({
+        success: true,
+        message: isProUser(user)
+          ? "No cancellable subscription was found for this account."
+          : "You're already on the Free plan.",
+      });
+    }
+    if (!isPaddleConfigured()) {
+      return res.status(503).json({
+        success: false,
+        code: "PADDLE_NOT_CONFIGURED",
+        message:
+          "Your web subscription can't be changed right now. Please try again later or contact support.",
+      });
+    }
     const cancellation = await syncUserCancellation(user, true);
-    return res.json({
+    return res.status(200).json({
       success: true,
       message: cancellation.scheduled
         ? "Cancellation is scheduled for the end of the billing period."
@@ -622,7 +668,13 @@ router.post("/cancel-subscription", protect, async (req, res) => {
       aiModel: GEMINI_MODEL,
     });
   } catch (error) {
-    return res.status(503).json({ success: false, message: error.message });
+    // Paddle API/network failure: report cleanly instead of leaking internals.
+    console.error("Subscription cancellation failed:", error.message);
+    return res.status(502).json({
+      success: false,
+      code: "CANCELLATION_FAILED",
+      message: "Could not update your subscription right now. Please try again.",
+    });
   }
 });
 
