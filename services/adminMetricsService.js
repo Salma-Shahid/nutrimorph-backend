@@ -495,7 +495,11 @@ const getExpoAccountUsage = async (projectId, accessToken) => {
 
 // Fallback when the token lacks billing permission: count this project's
 // billable builds since the billing period (or calendar month) started.
-const getExpoProjectBuildHistory = async (projectId, accessToken, periodStart) => {
+const getExpoProjectBuildHistory = async (
+  projectId,
+  accessToken,
+  periodStart,
+) => {
   const pageSize = 50;
   const builds = [];
   for (let offset = 0; offset < 2000; offset += pageSize) {
@@ -520,8 +524,9 @@ const getExpoProjectBuildHistory = async (projectId, accessToken, periodStart) =
         new Date(build.createdAt).getTime() >= periodStart &&
         BILLABLE_BUILD_STATUSES.has(status(build)),
     ).length,
-    activeBuilds: builds.filter((build) => ACTIVE_BUILD_STATUSES.has(status(build)))
-      .length,
+    activeBuilds: builds.filter((build) =>
+      ACTIVE_BUILD_STATUSES.has(status(build)),
+    ).length,
   };
 };
 
@@ -629,21 +634,25 @@ const getPaddleUsage = async () => {
   }
   try {
     const since = sinceDate();
-    const [activeSubscriptions, sales, verifiedTransactions30d, processedWebhookEvents30d] =
-      await Promise.all([
-        User.countDocuments({
-          isPro: true,
-          subscriptionExpiresAt: { $gt: new Date() },
-        }),
-        PaddleTransaction.aggregate([
-          { $match: { currency: "usd", paidAt: { $gte: since } } },
-          { $group: { _id: null, total: { $sum: "$amount" } } },
-        ]),
-        PaddleTransaction.countDocuments({ paidAt: { $gte: since } }),
-        ProcessedPaddleEvent.countDocuments({
-          processedAt: { $gte: since },
-        }),
-      ]);
+    const [
+      activeSubscriptions,
+      sales,
+      verifiedTransactions30d,
+      processedWebhookEvents30d,
+    ] = await Promise.all([
+      User.countDocuments({
+        isPro: true,
+        subscriptionExpiresAt: { $gt: new Date() },
+      }),
+      PaddleTransaction.aggregate([
+        { $match: { currency: "usd", paidAt: { $gte: since } } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
+      PaddleTransaction.countDocuments({ paidAt: { $gte: since } }),
+      ProcessedPaddleEvent.countDocuments({
+        processedAt: { $gte: since },
+      }),
+    ]);
     return {
       connected: true,
       activeSubscriptions,
@@ -666,15 +675,16 @@ const getPaddleUsage = async () => {
 };
 
 const getAdminMetrics = async () => {
-  const [resend, gemini, atlas, cloudinary, expo, paddle] = await Promise.all([
-    getResendUsage(),
-    getGeminiUsage(),
-    getDatabaseStatus(),
-    getAtlasUsage(),
-    getCloudinaryUsage(),
-    getExpoBuildUsage(),
-    getPaddleUsage(),
-  ]);
+  const [resend, gemini, database, atlas, cloudinary, expo, paddle] =
+    await Promise.all([
+      getResendUsage(),
+      getGeminiUsage(),
+      getDatabaseStatus(),
+      getAtlasUsage(),
+      getCloudinaryUsage(),
+      getExpoBuildUsage(),
+      getPaddleUsage(),
+    ]);
   return { resend, gemini, database, atlas, cloudinary, expo, paddle };
 };
 
