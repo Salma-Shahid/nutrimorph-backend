@@ -4,19 +4,36 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
 const connectDB = require("../config/db");
-const isProUser = require("../utils/isProUser");
-const { syncUserCancellation } = require("../services/paddleBilling");
+const { getSubscriptionSnapshot } = require("../utils/isProUser");
+const { safeSyncUserCancellation } = require("../services/paddleBilling");
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
 };
 
-const getSubscriptionStatus = (user) => {
-  const isPro = isProUser(user);
-  return {
-    subscriptionTier: isPro ? "pro" : "free",
-    isPro,
-  };
+// Always derived together so isPro / subscriptionTier / subscriptionStatus
+// cannot contradict each other in any auth response.
+const getSubscriptionStatus = (user) => getSubscriptionSnapshot(user);
+
+const ACCOUNT_RECOVERY_DAYS = 30;
+const DELETION_LINK_TTL_MS = 60 * 60 * 1000;
+
+const deactivateUser = async (user) => {
+  const paddle = await safeSyncUserCancellation(user, true);
+  const deactivatedAt = new Date();
+  user.deactivatedAt = deactivatedAt;
+  user.deactivationExpiresAt = new Date(
+    deactivatedAt.getTime() + ACCOUNT_RECOVERY_DAYS * 24 * 60 * 60 * 1000,
+  );
+  await user.save();
+  const notes = [];
+  if (paddle.warning) notes.push(paddle.warning);
+  if (user.billingProvider === "revenuecat") {
+    notes.push(
+      "Store subscriptions are not cancelled automatically. Cancel it in Google Play or the App Store to stop future charges.",
+    );
+  }
+  return notes;
 };
 
 // @desc Register new user & send/resend verification email
@@ -194,9 +211,8 @@ const login = async (req, res) => {
         });
       }
 
-      if (user.paddleSubscriptionId) {
-        await syncUserCancellation(user, false);
-      }
+      // Restoring the account must not depend on Paddle being reachable.
+      await safeSyncUserCancellation(user, false);
       user.deactivatedAt = null;
       user.deactivationExpiresAt = null;
       await user.save();
@@ -219,10 +235,9 @@ const login = async (req, res) => {
       dailyCalories: user.dailyCalories || 2000,
       dailyCalorieGoal: user.dailyCalorieGoal || user.dailyCalories || 2000,
       ...getSubscriptionStatus(user),
-      subscriptionExpiresAt: user.subscriptionExpiresAt,
-      subscriptionStatus: user.subscriptionStatus,
-      trialEndDate: user.trialEndDate,
       trialUsedAt: user.trialUsedAt,
+      dietPreference: user.dietPreference || "",
+      fitnessGoal: user.fitnessGoal,
       dailyChatCount: user.dailyChatCount,
       lastChatDate: user.lastChatDate,
       dailyScanCount: user.dailyScanCount,
@@ -358,9 +373,6 @@ const getMe = async (req, res) => {
         email: user.email,
         ...subscription,
         role: user.role || "user",
-        subscriptionExpiresAt: user.subscriptionExpiresAt,
-        subscriptionStatus: user.subscriptionStatus,
-        trialEndDate: user.trialEndDate,
         trialUsedAt: user.trialUsedAt,
         weight: user.weight,
         height: user.height,
@@ -385,6 +397,9 @@ const getMe = async (req, res) => {
         height: user.height,
         goal: user.goal,
         fitnessGoal: user.fitnessGoal,
+        activityLevel: user.activityLevel,
+        dietPreference: user.dietPreference || "",
+        macros: user.macros,
         medicalCondition: user.medicalCondition,
         unlockedBadges: user.unlockedBadges || [],
         steps: user.steps || 0,
@@ -423,8 +438,12 @@ const updateProfile = async (req, res) => {
       goal,
       calorieTarget,
       dailyCalorieGoal,
+      dietPreference,
     } = req.body;
 
+    if (typeof dietPreference === "string") {
+      user.dietPreference = dietPreference.trim().slice(0, 60);
+    }
     if (name) user.name = name;
     if (email) user.email = email;
     if (profileImage !== undefined) user.profileImage = profileImage;
@@ -532,8 +551,12 @@ const completeOnboarding = async (req, res) => {
       carbsTarget,
       fatsTarget,
       medicalCondition,
+      dietPreference,
     } = req.body;
 
+    if (typeof dietPreference === "string") {
+      user.dietPreference = dietPreference.trim().slice(0, 60);
+    }
     let age = Number(providedAge) || user.age || 25;
     if (!providedAge && dob) {
       const birthDate = new Date(dob);
@@ -675,36 +698,143 @@ const deleteAccount = async (req, res) => {
       });
     }
 
-    if (user.paddleSubscriptionId) {
-      await syncUserCancellation(user, true);
-    }
-
-    const deactivatedAt = new Date();
-    user.deactivatedAt = deactivatedAt;
-    user.deactivationExpiresAt = new Date(
-      deactivatedAt.getTime() + 30 * 24 * 60 * 60 * 1000,
-    );
-    await user.save();
+    const notes = await deactivateUser(user);
 
     return res.status(200).json({
       success: true,
       message:
         "Your account is deactivated and can be restored by signing in within 30 days.",
       deactivationExpiresAt: user.deactivationExpiresAt,
+      notes,
     });
   } catch (error) {
     console.error("Delete Account Error:", error);
-    return res.status(userHasPaddleConfigError(error) ? 503 : 500).json({
+    return res.status(500).json({
       success: false,
-      message: error.message || "Failed to delete account. Try again.",
+      message: "Failed to delete account. Please try again.",
     });
   }
 };
 
-const userHasPaddleConfigError = (error) =>
-  /PADDLE_API_KEY|PADDLE_WEBHOOK_SECRET|PADDLE_ENV|Paddle billing/i.test(
-    error?.message || "",
-  );
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+const isEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+const hashToken = (token) =>
+  crypto.createHash("sha256").update(String(token)).digest("hex");
+
+// @desc Request account deletion from the website (Google Play requirement).
+//       Emails a one-hour confirmation link so nobody can delete another
+//       person's account just by knowing their email address.
+// @route POST /api/auth/delete-request
+// @access Public
+const requestAccountDeletion = async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  if (!isEmail(email)) {
+    return res.status(400).json({
+      success: false,
+      message: "Enter the email address you use for NutriMorph.",
+    });
+  }
+  // Checked before looking up the account so the response never reveals
+  // whether an account exists.
+  if (!process.env.RESEND_API_KEY || !process.env.RESEND_FROM_EMAIL) {
+    return res.status(503).json({
+      success: false,
+      message:
+        "Deletion emails are temporarily unavailable. Delete your account from Profile in the app, or contact support.",
+    });
+  }
+
+  const genericResponse = {
+    success: true,
+    message:
+      "If an active NutriMorph account uses this email, we've sent a confirmation link. It expires in 1 hour.",
+  };
+
+  try {
+    await connectDB();
+    const user = await User.findOne({ email });
+    if (!user || user.deactivatedAt) {
+      return res.status(200).json(genericResponse);
+    }
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    user.accountDeletionToken = hashToken(rawToken);
+    user.accountDeletionTokenExpires = new Date(
+      Date.now() + DELETION_LINK_TTL_MS,
+    );
+    await user.save();
+
+    const appUrl = (
+      process.env.FRONTEND_URL ||
+      process.env.CLIENT_URL ||
+      "https://nutrimorph.app"
+    ).replace(/\/$/, "");
+    const confirmUrl = `${appUrl}/delete-account?token=${rawToken}&email=${encodeURIComponent(email)}`;
+
+    await sendEmail({
+      email,
+      subject: "Confirm your NutriMorph account deletion",
+      html: `<div style="font-family:Arial,sans-serif;color:#111827;line-height:1.6"><h2>Confirm account deletion</h2><p>We received a request to delete the NutriMorph account for ${email}.</p><p><a href="${confirmUrl}" style="background:#dc2626;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block">Confirm deletion</a></p><p>This link expires in 1 hour. After you confirm, your account is deactivated immediately and your profile, meals, weight history, and chats are permanently deleted after ${ACCOUNT_RECOVERY_DAYS} days. Signing in during that period restores the account.</p><p>If you did not request this, ignore this email and nothing will change.</p></div>`,
+    });
+
+    return res.status(200).json(genericResponse);
+  } catch (error) {
+    console.error("Account deletion request failed:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Could not send the confirmation email. Please try again later.",
+    });
+  }
+};
+
+// @desc Confirm account deletion with the emailed token.
+// @route POST /api/auth/delete-confirm
+// @access Public
+const confirmAccountDeletion = async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const token = String(req.body?.token || "");
+  if (!isEmail(email) || !/^[a-f0-9]{64}$/i.test(token)) {
+    return res.status(400).json({
+      success: false,
+      message: "This deletion link is invalid. Request a new one.",
+    });
+  }
+
+  try {
+    await connectDB();
+    const user = await User.findOne({
+      email,
+      accountDeletionToken: hashToken(token),
+      accountDeletionTokenExpires: { $gt: new Date() },
+    }).select("+accountDeletionToken +accountDeletionTokenExpires");
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "This deletion link is invalid or has expired. Request a new one.",
+      });
+    }
+
+    user.accountDeletionToken = undefined;
+    user.accountDeletionTokenExpires = undefined;
+    const notes = user.deactivatedAt ? [] : await deactivateUser(user);
+    // Persists the cleared token when the account was already deactivated.
+    if (user.isModified()) await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `Your account is deactivated. All data will be permanently deleted on ${user.deactivationExpiresAt.toDateString()}. Sign in before then to cancel.`,
+      deactivationExpiresAt: user.deactivationExpiresAt,
+      notes,
+    });
+  } catch (error) {
+    console.error("Account deletion confirmation failed:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Could not complete the deletion. Please try again.",
+    });
+  }
+};
 
 module.exports = {
   register,
@@ -716,4 +846,6 @@ module.exports = {
   updateProfile,
   completeOnboarding, //  Added Onboarding Handler
   deleteAccount,
+  requestAccountDeletion,
+  confirmAccountDeletion,
 };

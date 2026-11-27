@@ -42,26 +42,57 @@ const allowedOrigins = [
   "http://192.168.18.113:8081",
 ];
 
+// Local development clients (Expo Web on :8081/:19006, Next.js on :3000, LAN
+// devices) on any port. These are only reachable from the developer's machine.
+const localDevOrigin =
+  /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/;
+const extraOrigins = (process.env.CORS_EXTRA_ORIGINS || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+const isAllowedOrigin = (origin) =>
+  allowedOrigins.includes(origin) ||
+  extraOrigins.includes(origin) ||
+  localDevOrigin.test(origin) ||
+  process.env.NODE_ENV !== "production";
+
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps, Postman, curl)
+    // Allow requests with no origin (native mobile apps, Postman, curl).
     if (!origin) return callback(null, true);
-    if (
-      allowedOrigins.indexOf(origin) !== -1 ||
-      process.env.NODE_ENV !== "production"
-    ) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
+    // Disallowed origins get no CORS headers (the browser blocks them) rather
+    // than an Error, which would turn every preflight into a 500.
+    return callback(null, isAllowedOrigin(origin));
   },
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  // Standard client headers. `Cache-Control`/`Pragma` are sent by the app's
+  // profile refresh and by browsers; omitting them fails the preflight.
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "Accept",
+    "Origin",
+    "X-Requested-With",
+    "Cache-Control",
+    "Pragma",
+    "Expires",
+    "If-None-Match",
+    "If-Modified-Since",
+  ],
+  exposedHeaders: ["RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"],
   credentials: true,
+  maxAge: 86400,
+  optionsSuccessStatus: 204,
 };
 
 app.use(cors(corsOptions));
 app.options(/(.*)/, cors(corsOptions));
+// Preflights from disallowed origins end here (without CORS headers) instead
+// of falling through to the database and route handlers.
+app.use((req, res, next) =>
+  req.method === "OPTIONS" ? res.sendStatus(204) : next(),
+);
 
 app.use("/api", async (req, res, next) => {
   try {
@@ -88,6 +119,13 @@ app.post(
   "/api/payment/webhook",
   express.raw({ type: "application/json" }),
   paymentRoutes.handlePaddleWebhook,
+);
+// Registered before the per-IP API rate limiter so RevenueCat retries from
+// shared infrastructure IPs are never throttled.
+app.post(
+  "/api/payment/revenuecat/webhook",
+  express.json({ limit: "1mb" }),
+  paymentRoutes.handleRevenueCatWebhook,
 );
 
 app.use(express.json({ limit: "50mb" }));

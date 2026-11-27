@@ -6,26 +6,39 @@ const ActivityLog = require("../models/ActivityLog");
 const ProcessedPaddleEvent = require("../models/ProcessedPaddleEvent");
 const PaddlePayout = require("../models/PaddlePayout");
 const sendEmail = require("../utils/sendEmail");
-const isProUser = require("../utils/isProUser");
+const {
+  getSubscriptionSnapshot,
+  activeProFilter,
+} = require("../utils/isProUser");
 const {
   getAdminMetrics,
   getPaddleUsage,
   getExpoBuildUsage,
 } = require("../services/adminMetricsService");
-const { syncUserCancellation } = require("../services/paddleBilling");
+const { safeSyncUserCancellation } = require("../services/paddleBilling");
+
+// Fields that must never be sent to the dashboard, even to admins.
+const PRIVATE_USER_FIELDS =
+  "-password -verificationToken -verificationTokenExpires -passwordResetToken -passwordResetTokenExpires -accountDeletionToken -accountDeletionTokenExpires";
+
+const toAdminUser = (user) => {
+  const plain = user.toObject ? user.toObject() : user;
+  return { ...plain, ...getSubscriptionSnapshot(plain) };
+};
 
 // 1. Get Platform Stats & Metrics
 const getAdminStats = async (req, res, next) => {
   try {
     // Database counts
     const activeUserFilter = { deactivatedAt: null };
-    const totalUsers = await User.countDocuments(activeUserFilter);
-    const users = await User.find(activeUserFilter).select(
-      "role subscriptionTier isPro subscriptionExpiresAt",
-    );
-    const proUsers = users.filter(
-      (user) => user.role !== "admin" && isProUser(user),
-    ).length;
+    const [totalUsers, proUsers] = await Promise.all([
+      User.countDocuments(activeUserFilter),
+      User.countDocuments({
+        ...activeUserFilter,
+        role: { $ne: "admin" },
+        ...activeProFilter(),
+      }),
+    ]);
 
     const totalMeals = await Meal.countDocuments();
     const totalExercises = await Exercise.countDocuments();
@@ -49,15 +62,11 @@ const getAdminStats = async (req, res, next) => {
 // 2. Get All Registered Users
 const getAllUsers = async (req, res, next) => {
   try {
-    const users = await User.find().select("-password").sort({ createdAt: -1 });
-    const data = users.map((user) => {
-      const activePro = isProUser(user);
-      return {
-        ...user.toObject(),
-        subscriptionTier: activePro ? "pro" : "free",
-        isPro: activePro,
-      };
-    });
+    const users = await User.find()
+      .select(PRIVATE_USER_FIELDS)
+      .sort({ createdAt: -1 })
+      .lean();
+    const data = users.map(toAdminUser);
     return res.status(200).json({
       success: true,
       count: users.length,
@@ -80,9 +89,7 @@ const deleteUser = async (req, res, next) => {
         .json({ success: false, message: "User not found" });
     }
 
-    if (user.paddleSubscriptionId) {
-      await syncUserCancellation(user, true);
-    }
+    const paddle = await safeSyncUserCancellation(user, true);
 
     user.deactivatedAt = new Date();
     user.deactivationExpiresAt = new Date(
@@ -95,12 +102,118 @@ const deleteUser = async (req, res, next) => {
       admin: req.user._id,
       adminEmail: req.user.email,
       action: "DELETE_USER",
-      details: `Deactivated user account ${user.email} for the 30-day recovery period`,
+      details: `Deactivated user account ${user.email} for the 30-day recovery period${paddle.warning ? ` (${paddle.warning})` : ""}`,
     });
 
     return res.status(200).json({
       success: true,
       message: "User account deactivated for the 30-day recovery period",
+      warning: paddle.warning || null,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 4b. Switch a user's plan (free / pro / trial) with a full audit trail.
+// @route PATCH /api/admin/users/:id/subscription
+const PLAN_OPTIONS = new Set(["free", "pro", "trial"]);
+const updateUserSubscription = async (req, res, next) => {
+  try {
+    const plan = String(req.body?.plan || "").toLowerCase();
+    if (!PLAN_OPTIONS.has(plan)) {
+      return res.status(400).json({
+        success: false,
+        message: "Plan must be one of: free, pro, trial.",
+      });
+    }
+    const rawDays = req.body?.durationDays;
+    const durationDays =
+      rawDays === null || rawDays === undefined || rawDays === ""
+        ? null
+        : Number(rawDays);
+    if (
+      durationDays !== null &&
+      (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > 3650)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Duration must be a whole number of days between 1 and 3650.",
+      });
+    }
+
+    const user = await User.findById(req.params.id).select(PRIVATE_USER_FIELDS);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const before = getSubscriptionSnapshot(user);
+    const now = new Date();
+    const addDays = (days) =>
+      new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+
+    // isPro, subscriptionTier and subscriptionStatus are always written
+    // together so /api/auth/me and the app agree immediately.
+    if (plan === "pro") {
+      Object.assign(user, {
+        subscriptionTier: "pro",
+        isPro: true,
+        subscriptionStatus: "active",
+        subscriptionExpiresAt: durationDays ? addDays(durationDays) : null,
+        billingProvider: "admin",
+        trialStartDate: null,
+        trialEndDate: null,
+      });
+    } else if (plan === "trial") {
+      const trialEnd = addDays(durationDays || 7);
+      Object.assign(user, {
+        subscriptionTier: "pro",
+        isPro: true,
+        subscriptionStatus: "trialing",
+        subscriptionExpiresAt: trialEnd,
+        billingProvider: "admin",
+        trialStartDate: now,
+        trialEndDate: trialEnd,
+        trialUsedAt: user.trialUsedAt || now,
+      });
+    } else {
+      Object.assign(user, {
+        subscriptionTier: "free",
+        isPro: false,
+        subscriptionStatus: "free",
+        subscriptionExpiresAt: null,
+        billingProvider: null,
+        trialStartDate: null,
+        trialEndDate: null,
+      });
+    }
+    await user.save();
+
+    const after = getSubscriptionSnapshot(user);
+    const expiry = after.subscriptionExpiresAt
+      ? ` until ${new Date(after.subscriptionExpiresAt).toISOString().slice(0, 10)}`
+      : after.isPro
+        ? " with no expiry"
+        : "";
+    const paidElsewhere =
+      plan === "free" &&
+      ["paddle", "revenuecat"].includes(before.billingProvider) &&
+      before.isPro
+        ? ` Note: the user's ${before.billingProvider} subscription is still billed and may re-grant Pro on its next renewal.`
+        : "";
+
+    await ActivityLog.create({
+      admin: req.user._id,
+      adminEmail: req.user.email,
+      action: "UPDATE_SUBSCRIPTION",
+      details: `Changed plan for ${user.email}: ${before.plan} → ${after.plan}${expiry}.${paidElsewhere}`,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `${user.email} is now on the ${after.plan} plan.`,
+      warning: paidElsewhere.trim() || null,
+      data: toAdminUser(user),
     });
   } catch (error) {
     next(error);
@@ -112,14 +225,18 @@ const getRevenueStats = async (req, res) => {
   try {
     const paddle = await getPaddleUsage();
     if (!paddle.connected) {
-      return res.status(503).json({
-        success: false,
+      // Not configured yet (e.g. pending Paddle approval) is a state, not an error.
+      return res.status(200).json({
+        success: true,
+        configured: false,
+        data: null,
         message: paddle.message,
       });
     }
 
     res.status(200).json({
       success: true,
+      configured: true,
       data: {
         totalRevenue: paddle.transactionVolumeUSD,
         activeSubscriptions: paddle.activeSubscriptions,
@@ -187,9 +304,9 @@ const sendBroadcast = async (req, res) => {
 
     let query = { deactivatedAt: null };
     if (targetAudience === "pro") {
-      query.subscriptionTier = "pro";
+      query = { ...query, ...activeProFilter() };
     } else if (targetAudience === "free") {
-      query.subscriptionTier = { $ne: "pro" };
+      query = { ...query, $nor: [activeProFilter()] };
     }
 
     const targetUsers = await User.find(query).select("email name");
@@ -261,24 +378,23 @@ const getApiUsageStats = async (req, res) => {
         geminiLimit: services.gemini.limit,
         geminiPromptTokens: services.gemini.promptTokens,
         geminiCandidateTokens: services.gemini.candidateTokens,
-        dbStorageUsedMB:
-          services.atlas.used == null
-            ? null
-            : services.atlas.used / 1024 / 1024,
-        dbLimitMB:
-          services.atlas.limit == null
-            ? null
-            : services.atlas.limit / 1024 / 1024,
+        // Storage comes from the live connection's dbStats (MB).
+        dbStorageUsedMB: services.database.used,
+        dbLimitMB: services.database.limit,
+        dbConnected: services.database.connected,
         cloudinaryStorageGB: services.cloudinary.used,
         cloudinaryLimitGB: services.cloudinary.limit,
         expoBuildsUsed: services.expo.used,
         expoBuildsLimit: services.expo.limit,
         expoActiveBuilds: services.expo.activeBuilds,
+        expoBillingPeriod: services.expo.billingPeriod || null,
+        expoUsageSource: services.expo.source || null,
         expoOtaBandwidthMB: null,
         expoOtaLimitMB: null,
         services: {
           resend: services.resend,
           gemini: services.gemini,
+          database: services.database,
           atlas: services.atlas,
           cloudinary: services.cloudinary,
           expo: services.expo,
@@ -339,7 +455,7 @@ const syncServicesHealth = async (req, res) => {
   try {
     const services = await getAdminMetrics();
     const connected = Object.entries(services)
-      .filter(([name]) => name !== "gemini")
+      .filter(([name]) => !["gemini", "atlas"].includes(name))
       .every(([, value]) => value.connected);
     res.status(200).json({
       success: true,
@@ -439,6 +555,7 @@ const testWebhookPing = async (req, res) => {
 module.exports = {
   getAdminStats,
   getAllUsers,
+  updateUserSubscription,
   testWebhookPing,
   getGatewayHealth,
   testEmailSystem,

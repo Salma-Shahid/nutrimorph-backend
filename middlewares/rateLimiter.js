@@ -24,3 +24,15 @@ exports.aiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+// Strict limiter for public endpoints that send email (deletion requests).
+exports.emailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: {
+    success: false,
+    message: "Too many requests. Please wait 15 minutes and try again.",
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});

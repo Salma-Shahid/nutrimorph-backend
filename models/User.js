@@ -36,8 +36,19 @@ const userSchema = new mongoose.Schema(
     paddleSubscriptionId: { type: String },
     paddlePriceId: { type: String },
     paddleLastEventAt: { type: Date },
+    // Which system last granted the current plan. Used so one provider's
+    // cancellation never revokes access granted by another.
+    billingProvider: {
+      type: String,
+      enum: [null, "paddle", "revenuecat", "admin"],
+      default: null,
+    },
+    revenueCatProductId: { type: String },
+    revenueCatLastSyncedAt: { type: Date },
     deactivatedAt: { type: Date, default: null },
     deactivationExpiresAt: { type: Date, default: null },
+    accountDeletionToken: { type: String, select: false },
+    accountDeletionTokenExpires: { type: Date, select: false },
 
     //  Free Limits Tracking
     dailyChatCount: { type: Number, default: 0 },
@@ -63,6 +74,8 @@ const userSchema = new mongoose.Schema(
     fitnessGoal: { type: String },
     activityLevel: { type: String },
     medicalCondition: { type: String, default: "None" },
+    // Free-text cuisine/diet preference, e.g. "Desi", "Western", "Vegetarian".
+    dietPreference: { type: String, trim: true, maxlength: 60, default: "" },
     preferredMealsCount: { type: Number, default: 4 },
     dailyCalories: { type: Number, default: 2000 },
     dailyCalorieGoal: { type: Number, default: 2000 },

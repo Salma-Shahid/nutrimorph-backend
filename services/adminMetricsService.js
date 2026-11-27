@@ -1,6 +1,8 @@
 const axios = require("axios");
 const crypto = require("crypto");
 const fs = require("fs");
+const mongoose = require("mongoose");
+const connectDB = require("../config/db");
 const GeminiUsage = require("../models/GeminiUsage");
 const EmailUsage = require("../models/EmailUsage");
 const User = require("../models/User");
@@ -231,20 +233,103 @@ const atlasRequest = async (path, params = {}) => {
   return { data };
 };
 
+const MONGOOSE_STATES = {
+  0: "disconnected",
+  1: "connected",
+  2: "connecting",
+  3: "disconnecting",
+};
+
+const withTimeout = (promise, ms, label) =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out`)), ms),
+    ),
+  ]);
+
+// Primary MongoDB status: the live runtime connection the API actually uses
+// (MONGO_URI / MONGODB_URI). Independent of the optional Atlas Admin API.
+const getDatabaseStatus = async () => {
+  const limitMB = configuredLimit("MONGODB_STORAGE_LIMIT_MB");
+  try {
+    await connectDB();
+  } catch (error) {
+    return {
+      connected: false,
+      state: MONGOOSE_STATES[mongoose.connection.readyState] || "unknown",
+      used: null,
+      limit: limitMB,
+      message:
+        "The API cannot reach MongoDB. Check MONGO_URI and the Atlas network access list for this server.",
+    };
+  }
+
+  const state = MONGOOSE_STATES[mongoose.connection.readyState] || "unknown";
+  if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) {
+    return {
+      connected: false,
+      state,
+      used: null,
+      limit: limitMB,
+      message: `MongoDB connection is ${state}.`,
+    };
+  }
+
+  const db = mongoose.connection.db;
+  const started = Date.now();
+  try {
+    await withTimeout(db.admin().ping(), 5000, "MongoDB ping");
+  } catch (error) {
+    return {
+      connected: false,
+      state,
+      used: null,
+      limit: limitMB,
+      message: "MongoDB is connected but did not answer a ping.",
+    };
+  }
+  const latencyMs = Date.now() - started;
+
+  // dbStats works with the app's own credentials, so storage is available
+  // even when the Atlas Admin API is restricted.
+  let usedMB = null;
+  try {
+    const stats = await withTimeout(db.stats(), 5000, "MongoDB dbStats");
+    const bytes = Number(stats.storageSize || 0) + Number(stats.indexSize || 0);
+    usedMB = Number.isFinite(bytes) ? bytes / 1024 / 1024 : null;
+  } catch {
+    usedMB = null;
+  }
+
+  return {
+    connected: true,
+    state,
+    latencyMs,
+    databaseName: db.databaseName,
+    used: usedMB,
+    limit: limitMB,
+    source: "Live Mongoose connection",
+    message: `Live database connection is healthy (ping ${latencyMs} ms).`,
+  };
+};
+
 const getAtlasUsage = async () => {
   const groupId =
     process.env.MONGODB_ATLAS_GROUP_ID || process.env.MONGODB_ATLAS_PROJECT_ID;
   const publicKey = process.env.MONGODB_ATLAS_PUBLIC_KEY;
   const privateKey = process.env.MONGODB_ATLAS_PRIVATE_KEY;
 
-  // Agar Atlas API keys configured nahi hain toh graceful fallback return karein
+  // Atlas Admin API metrics are optional extras; the live DB status above is
+  // what determines whether MongoDB is connected.
   if (!groupId || !publicKey || !privateKey) {
     return {
       connected: false,
+      optional: true,
       used: null,
       limit: null,
       message:
-        "MongoDB is used by the app, but Atlas usage metrics require MONGODB_ATLAS_GROUP_ID, MONGODB_ATLAS_PUBLIC_KEY, and MONGODB_ATLAS_PRIVATE_KEY.",
+        "Optional Atlas Admin API metrics are not configured. Live database status is unaffected.",
     };
   }
 
@@ -258,18 +343,27 @@ const getAtlasUsage = async () => {
     }
     return {
       connected: true,
+      optional: true,
       used: null,
       limit: null,
-      message:
-        "Atlas API access succeeded, but storage usage metrics are not available from the configured endpoints.",
+      message: "Atlas Admin API access is working.",
     };
   } catch (error) {
+    // Never surface raw provider errors (they can include key IDs or IPs).
+    const status = Number(String(error.message).match(/returned (\d{3})/)?.[1]);
+    const message =
+      status === 403
+        ? "Atlas Admin API metrics are restricted by the API key's IP access list. Live database status is unaffected."
+        : status === 401
+          ? "Atlas Admin API key was rejected. Live database status is unaffected."
+          : "Atlas Admin API metrics are temporarily unavailable. Live database status is unaffected.";
     return {
       connected: false,
+      optional: true,
+      restricted: status === 403,
       used: null,
       limit: null,
-      message:
-        error.message || "MongoDB Atlas usage metrics could not be retrieved.",
+      message,
     };
   }
 };
@@ -313,136 +407,192 @@ const getCloudinaryUsage = async () => {
   }
 };
 
+const EXPO_GRAPHQL_URL = "https://api.expo.dev/graphql";
+// Expo bills builds that actually ran; queued/cancelled builds do not count.
+const BILLABLE_BUILD_STATUSES = new Set(["finished", "errored"]);
+const ACTIVE_BUILD_STATUSES = new Set([
+  "new",
+  "in_queue",
+  "in_progress",
+  "pending_cancel",
+]);
+
+const expoGraphql = async (query, variables, accessToken) => {
+  const response = await axios.post(
+    EXPO_GRAPHQL_URL,
+    { query, variables },
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      timeout: REQUEST_TIMEOUT_MS,
+    },
+  );
+  if (response.data?.errors?.length) {
+    throw new Error(
+      response.data.errors.map((error) => error.message).join("; "),
+    );
+  }
+  return response.data?.data;
+};
+
+// The same account-level, billing-period usage the Expo dashboard and
+// `eas-cli` show (e.g. "13/30"): it spans every project on the account and
+// resets on the billing date, not the calendar month.
+const EXPO_ACCOUNT_USAGE_QUERY = `
+  query NutriMorphAdminExpoUsage($appId: String!, $currentDate: DateTime!) {
+    app {
+      byId(appId: $appId) {
+        id
+        ownerAccount {
+          id
+          name
+          billingPeriod(date: $currentDate) { id start end }
+          usageMetrics {
+            EAS_BUILD: byBillingPeriod(date: $currentDate, service: BUILDS) {
+              id
+              planMetrics { id serviceMetric metricType value limit }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const EXPO_BUILDS_QUERY = `
+  query NutriMorphAdminBuildMetrics($appId: String!, $offset: Int!, $limit: Int!) {
+    app {
+      byId(appId: $appId) {
+        id
+        builds(offset: $offset, limit: $limit) { id status createdAt }
+      }
+    }
+  }
+`;
+
+const getExpoAccountUsage = async (projectId, accessToken) => {
+  const data = await expoGraphql(
+    EXPO_ACCOUNT_USAGE_QUERY,
+    { appId: projectId, currentDate: new Date().toISOString() },
+    accessToken,
+  );
+  const account = data?.app?.byId?.ownerAccount;
+  const metric = account?.usageMetrics?.EAS_BUILD?.planMetrics?.find(
+    (entry) => entry.serviceMetric === "BUILDS" && entry.metricType === "BUILD",
+  );
+  if (!account || !metric) return null;
+  return {
+    used: Number(metric.value) || 0,
+    limit: Number(metric.limit) > 0 ? Number(metric.limit) : null,
+    billingPeriod: account.billingPeriod
+      ? { start: account.billingPeriod.start, end: account.billingPeriod.end }
+      : null,
+    accountName: account.name,
+  };
+};
+
+// Fallback when the token lacks billing permission: count this project's
+// billable builds since the billing period (or calendar month) started.
+const getExpoProjectBuildHistory = async (projectId, accessToken, periodStart) => {
+  const pageSize = 50;
+  const builds = [];
+  for (let offset = 0; offset < 2000; offset += pageSize) {
+    const data = await expoGraphql(
+      EXPO_BUILDS_QUERY,
+      { appId: projectId, offset, limit: pageSize },
+      accessToken,
+    );
+    const app = data?.app?.byId;
+    if (!app) return null;
+    const page = app.builds || [];
+    builds.push(...page);
+    const reachedOlder = page.some(
+      (build) => new Date(build.createdAt).getTime() < periodStart,
+    );
+    if (page.length < pageSize || reachedOlder) break;
+  }
+  const status = (build) => String(build.status || "").toLowerCase();
+  return {
+    used: builds.filter(
+      (build) =>
+        new Date(build.createdAt).getTime() >= periodStart &&
+        BILLABLE_BUILD_STATUSES.has(status(build)),
+    ).length,
+    activeBuilds: builds.filter((build) => ACTIVE_BUILD_STATUSES.has(status(build)))
+      .length,
+  };
+};
+
 const getExpoBuildUsage = async () => {
   const accessToken = process.env.EXPO_ACCESS_TOKEN;
   const projectId = process.env.EXPO_PROJECT_ID || process.env.EAS_PROJECT_ID;
+  const envLimit = configuredLimit("EXPO_MONTHLY_BUILD_LIMIT");
   if (!accessToken || !projectId) {
     return {
       ...unavailable(
         "EXPO_ACCESS_TOKEN and EXPO_PROJECT_ID (or EAS_PROJECT_ID) are required.",
       ),
       used: null,
-      limit: configuredLimit("EXPO_MONTHLY_BUILD_LIMIT"),
+      limit: envLimit,
       activeBuilds: null,
     };
   }
+
   try {
-    const query = `
-      query NutriMorphAdminBuildMetrics(
-        $appId: String!
-        $offset: Int!
-        $limit: Int!
-      ) {
-        app {
-          byId(appId: $appId) {
-            id
-            builds(offset: $offset, limit: $limit) {
-              id
-              status
-              createdAt
-            }
-          }
-        }
-      }
-    `;
-    const response = await axios.post(
-      "https://api.expo.dev/graphql",
-      {
-        query,
-        variables: { appId: projectId, offset: 0, limit: 100 },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        timeout: REQUEST_TIMEOUT_MS,
-      },
-    );
-    if (response.data?.errors?.length) {
-      throw new Error(
-        response.data.errors.map((error) => error.message).join("; "),
-      );
+    let accountUsage = null;
+    let accountUsageError = null;
+    try {
+      accountUsage = await getExpoAccountUsage(projectId, accessToken);
+    } catch (error) {
+      accountUsageError = error.message;
     }
-    const app = response.data?.data?.app?.byId;
-    if (!app) {
+
+    const periodStart = accountUsage?.billingPeriod?.start
+      ? new Date(accountUsage.billingPeriod.start).getTime()
+      : new Date(monthStart()).getTime();
+    const history = await getExpoProjectBuildHistory(
+      projectId,
+      accessToken,
+      periodStart,
+    );
+    if (!history && !accountUsage) {
       return {
         ...unavailable(
           "Expo could not find this project or the access token cannot view it. Use the EAS project UUID and a token with project access.",
         ),
         used: null,
-        limit: configuredLimit("EXPO_MONTHLY_BUILD_LIMIT"),
+        limit: envLimit,
         activeBuilds: null,
       };
     }
-    const builds = app.builds || [];
-    const startOfMonth = new Date(monthStart()).getTime();
-    let offset = 100;
 
-    while (
-      builds.length >= offset &&
-      !builds.some(
-        (build) => new Date(build.createdAt).getTime() < startOfMonth,
-      )
-    ) {
-      if (offset >= 10000) {
-        return {
-          ...unavailable(
-            "Expo has more than 10,000 recent builds; the usage count was not truncated.",
-          ),
-          used: null,
-          limit: configuredLimit("EXPO_MONTHLY_BUILD_LIMIT"),
-          activeBuilds: null,
-        };
-      }
-      const nextResponse = await axios.post(
-        "https://api.expo.dev/graphql",
-        {
-          query,
-          variables: { appId: projectId, offset, limit: 100 },
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          timeout: REQUEST_TIMEOUT_MS,
-        },
-      );
-      if (nextResponse.data?.errors?.length) {
-        throw new Error(
-          nextResponse.data.errors.map((error) => error.message).join("; "),
-        );
-      }
-      const nextPage = nextResponse.data?.data?.app?.byId?.builds;
-      if (!nextPage) {
-        throw new Error("Expo did not return the next page of builds.");
-      }
-      builds.push(...nextPage);
-      if (
-        nextPage.length < 100 ||
-        nextPage.some(
-          (build) => new Date(build.createdAt).getTime() < startOfMonth,
-        )
-      ) {
-        break;
-      }
-      offset += 100;
+    if (accountUsage) {
+      return {
+        connected: true,
+        used: accountUsage.used,
+        // The plan's own limit is authoritative; the env var is a fallback.
+        limit: accountUsage.limit ?? envLimit,
+        activeBuilds: history?.activeBuilds ?? null,
+        billingPeriod: accountUsage.billingPeriod,
+        projectId,
+        source: "Expo account billing usage",
+        message: `Billable builds for the "${accountUsage.accountName}" account this billing period (all projects), matching the Expo dashboard.`,
+      };
     }
 
     return {
       connected: true,
-      used: builds.filter(
-        (build) => new Date(build.createdAt).getTime() >= startOfMonth,
-      ).length,
-      limit: configuredLimit("EXPO_MONTHLY_BUILD_LIMIT"),
-      activeBuilds: builds.filter((build) =>
-        ["new", "in_queue", "in_progress"].includes(
-          String(build.status).toLowerCase(),
-        ),
-      ).length,
+      used: history.used,
+      limit: envLimit,
+      activeBuilds: history.activeBuilds,
+      billingPeriod: null,
       projectId,
-      message: "Build metrics retrieved from the Expo EAS GraphQL API.",
+      source: "Project build history",
+      message:
+        "Estimated from this project's finished and errored builds since the start of the month. Give the Expo token account billing access for exact dashboard figures.",
+      accountUsageError,
     };
   } catch (error) {
     return {
@@ -453,7 +603,7 @@ const getExpoBuildUsage = async () => {
           "Expo build metrics could not be retrieved.",
       ),
       used: null,
-      limit: configuredLimit("EXPO_MONTHLY_BUILD_LIMIT"),
+      limit: envLimit,
       activeBuilds: null,
     };
   }
@@ -524,7 +674,7 @@ const getAdminMetrics = async () => {
     getExpoBuildUsage(),
     getPaddleUsage(),
   ]);
-  return { resend, gemini, atlas, cloudinary, expo, paddle };
+  return { resend, gemini, database, atlas, cloudinary, expo, paddle };
 };
 
 module.exports = {

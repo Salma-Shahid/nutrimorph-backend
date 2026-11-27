@@ -4,6 +4,7 @@ const router = express.Router();
 const {
   getAdminStats,
   getAllUsers,
+  updateUserSubscription,
   deleteUser,
   getRevenueStats,
   getAllReviews,
@@ -30,6 +31,8 @@ router.get("/stats", getAdminStats);
 router.get("/users", getAllUsers);
 router.get("/revenue", getRevenueStats); //  Added new route for revenue
 router.delete("/users/:id", deleteUser);
+// Switch plan: { plan: "free" | "pro" | "trial", durationDays?: number }
+router.patch("/users/:id/subscription", updateUserSubscription);
 // Review moderation routes
 router.get("/reviews", getAllReviews);
 router.delete("/reviews/:id", deleteReview);

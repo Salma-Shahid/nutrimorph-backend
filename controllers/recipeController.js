@@ -3,41 +3,121 @@ const Meal = require("../models/Meal");
 const User = require("../models/User");
 const { updateStreak } = require("../utils/streak");
 
-// Helper function for user streak
+const normalize = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, " ");
+
+// Labels users pick → stored cuisine values they should match.
+const CUISINE_ALIASES = {
+  arabic: ["arabic", "middle eastern", "lebanese", "arab"],
+  "middle eastern": ["middle eastern", "arabic", "lebanese", "arab"],
+  asian: ["asian", "asian fusion", "chinese", "thai", "japanese"],
+  desi: ["pakistani", "indian", "desi"],
+  pakistani: ["pakistani", "desi"],
+  indian: ["indian", "desi"],
+};
+
+const titleCase = (value) =>
+  value.replace(/\b\w/g, (char) => char.toUpperCase());
+
+const toList = (value) =>
+  String(value || "")
+    .split(",")
+    .map(normalize)
+    .filter((entry) => entry && entry !== "all");
+
+const recipeTags = (recipe) =>
+  [recipe.category, ...(Array.isArray(recipe.tags) ? recipe.tags : [])]
+    .map(normalize)
+    .filter(Boolean);
+
+const matchesCuisine = (recipe, selected) => {
+  if (!selected.length) return true;
+  const cuisine = normalize(recipe.cuisine);
+  return selected.some((choice) =>
+    (CUISINE_ALIASES[choice] || [choice]).includes(cuisine),
+  );
+};
+
+const matchesCategory = (recipe, selected) => {
+  if (!selected.length) return true;
+  const tags = recipeTags(recipe);
+  return selected.some((choice) => tags.includes(choice));
+};
+
+const countFacet = (recipes, read) => {
+  const counts = new Map();
+  recipes.forEach((recipe) => {
+    const seen = new Set();
+    [].concat(read(recipe)).forEach((raw) => {
+      const key = normalize(raw);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      const entry = counts.get(key) || {
+        value: key,
+        // Keep the stored spelling (e.g. "High-Protein") for display.
+        label: String(raw).trim() || titleCase(key),
+        count: 0,
+      };
+      entry.count += 1;
+      counts.set(key, entry);
+    });
+  });
+  return [...counts.values()].sort(
+    (a, b) => b.count - a.count || a.label.localeCompare(b.label),
+  );
+};
+
 // 1. Get Recipes by Category or All
+// Filtering is done on normalised values (trim/lowercase/aliases) so seeded
+// data like "Middle Eastern" matches the "Arabic" chip, and casing/spacing
+// differences never produce an empty library. Multiple values may be sent
+// comma-separated (OR within a facet, AND across facets).
 const getCategorizedRecipes = async (req, res) => {
   try {
     const { category, cuisine, q } = req.query;
 
-    // Fetch global recipes only, excluding personal saved meals.
-    let query = {
-      isGlobal: true,
-    };
+    // Global library only; personal saved meals stay private to their owner.
+    const allRecipes = await SavedMeal.find({ isGlobal: true })
+      .sort({ createdAt: -1 })
+      .lean();
 
-    if (category && category !== "All") {
-      query.category = category;
-    }
-    if (cuisine && cuisine !== "All") {
-      query.cuisine =
-        cuisine.toLowerCase() === "arabic"
-          ? { $in: [/^arabic$/i, /^middle eastern$/i] }
-          : new RegExp(
-              String(cuisine).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-              "i",
-            );
-    }
-    if (typeof q === "string" && q.trim()) {
-      const search = q.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      query.name = { $regex: search, $options: "i" };
-    }
+    const selectedCategories = toList(category);
+    const selectedCuisines = toList(cuisine);
+    const search = normalize(q);
+    const matchesSearch = (recipe) =>
+      !search ||
+      normalize(recipe.name).includes(search) ||
+      (Array.isArray(recipe.ingredients) &&
+        recipe.ingredients.some((item) => normalize(item).includes(search)));
 
-    const recipes = await SavedMeal.find(query).sort({ createdAt: -1 });
+    const searched = allRecipes.filter(matchesSearch);
+    const recipes = searched.filter(
+      (recipe) =>
+        matchesCategory(recipe, selectedCategories) &&
+        matchesCuisine(recipe, selectedCuisines),
+    );
 
     res.status(200).json({
       success: true,
       count: recipes.length,
-      recipes: recipes,
+      totalAvailable: allRecipes.length,
+      recipes,
       data: recipes,
+      // Each facet is counted against the other facet's selection so the
+      // chips show how many results choosing them would produce.
+      facets: {
+        cuisines: countFacet(
+          searched.filter((recipe) => matchesCategory(recipe, selectedCategories)),
+          (recipe) => recipe.cuisine,
+        ),
+        categories: countFacet(
+          searched.filter((recipe) => matchesCuisine(recipe, selectedCuisines)),
+          (recipe) => recipe.category,
+        ),
+      },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

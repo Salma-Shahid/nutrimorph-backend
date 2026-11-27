@@ -13,11 +13,21 @@ const getBmiCategory = (bmi) => {
 
 router.get("/", protect, async (req, res) => {
   try {
-    const entries = await WeightEntry.find({ userId: req.user._id })
-      .sort({ createdAt: -1 })
-      .limit(90)
-      .lean();
-    return res.json({ success: true, data: entries.reverse() });
+    // Full account history (bounded) so trends reflect every weigh-in, not
+    // just the last few. `?limit=` may lower or raise it up to 1000.
+    const requested = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(requested)
+      ? Math.min(Math.max(requested, 1), 1000)
+      : 365;
+    const [entries, total] = await Promise.all([
+      WeightEntry.find({ userId: req.user._id })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .select("weight createdAt")
+        .lean(),
+      WeightEntry.countDocuments({ userId: req.user._id }),
+    ]);
+    return res.json({ success: true, data: entries.reverse(), total });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

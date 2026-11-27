@@ -63,9 +63,43 @@ const syncUserCancellation = async (user, cancel) => {
   };
 };
 
+const isPaddleConfigured = () => {
+  try {
+    assertPaddleConfigured();
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// Never throws. Account deletion/restoration must not be blocked because
+// Paddle is unconfigured, pending approval, or temporarily unreachable.
+const safeSyncUserCancellation = async (user, cancel) => {
+  if (!user?.paddleSubscriptionId) return { ok: true, skipped: true };
+  if (!isPaddleConfigured()) {
+    return {
+      ok: false,
+      warning:
+        "Paddle billing is not configured, so the Paddle subscription could not be updated automatically.",
+    };
+  }
+  try {
+    const result = await syncUserCancellation(user, cancel);
+    return { ok: true, ...result };
+  } catch (error) {
+    console.error("Paddle cancellation sync failed:", error.message);
+    return {
+      ok: false,
+      warning: "The Paddle subscription could not be updated automatically.",
+    };
+  }
+};
+
 module.exports = {
   assertPaddleConfigured,
   assertPaddlePricesConfigured,
   getPaddleClient,
+  isPaddleConfigured,
   syncUserCancellation,
+  safeSyncUserCancellation,
 };

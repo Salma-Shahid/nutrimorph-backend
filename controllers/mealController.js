@@ -522,7 +522,70 @@ const updateMeal = async (req, res) => {
   }
 };
 
-// 8. Get AI Recovery Guidance
+// --- Personalised calorie-exceed recovery -----------------------------------
+const goalKind = (goal) => {
+  const value = String(goal || "").toLowerCase();
+  if (/lose|loss|cut/.test(value)) return "lose";
+  if (/gain|muscle|bulk/.test(value)) return "gain";
+  return "maintain";
+};
+
+const isDesiPreference = (preference) =>
+  /desi|pakistan|indian|south asian|urdu/i.test(String(preference || ""));
+
+const timeOfDay = (hour) =>
+  !Number.isFinite(hour)
+    ? "today"
+    : hour < 11
+      ? "this morning"
+      : hour < 16
+        ? "this afternoon"
+        : hour < 20
+          ? "this evening"
+          : "tonight";
+
+// Deterministic, personalised advice used when Gemini is unavailable. Safe by
+// design: no fasting, purging, or "burn it off" compensation.
+const buildFallbackRecovery = ({ excessKcal, goal, dietPreference, hour }) => {
+  const kind = goalKind(goal);
+  const desi = isDesiPreference(dietPreference);
+  const walkMinutes = Math.min(45, Math.max(10, Math.round(excessKcal / 8)));
+  const lateDay = Number.isFinite(hour) && hour >= 18;
+
+  const nextMeal = desi
+    ? lateDay
+      ? "If you're still hungry, keep it light: a bowl of daal or chana with salad and a small portion of roti, or plain dahi with cucumber."
+      : "For your next meal, build the plate around protein and vegetables: chicken or daal with sabzi, one roti instead of two, and raita instead of a fried side."
+    : lateDay
+      ? "If you're still hungry, keep it light: Greek yoghurt, a vegetable soup, or eggs with salad."
+      : "For your next meal, fill half the plate with vegetables, add a lean protein like chicken, fish, eggs or tofu, and keep starches to a fist-sized portion.";
+
+  const drink = desi
+    ? "Skip sugary chai, lassi and cold drinks for the rest of the day; water, green tea or lemon water are good swaps."
+    : "Swap sugary drinks and alcohol for water, sparkling water or unsweetened tea for the rest of the day.";
+
+  const goalLine =
+    kind === "lose"
+      ? `One day ${excessKcal} kcal over won't undo your weight-loss progress. Your weekly average matters far more.`
+      : kind === "gain"
+        ? `Going ${excessKcal} kcal over is fine for a muscle-gain goal if it came from protein-rich food. Aim to keep tomorrow at your normal target.`
+        : `Being ${excessKcal} kcal over once is normal when maintaining. Tomorrow's usual target balances it out.`;
+
+  const movement =
+    excessKcal >= 150
+      ? `A relaxed ${walkMinutes}-minute walk ${timeOfDay(hour)} helps digestion and energy. It's optional and isn't a punishment.`
+      : "A short walk after your next meal is a nice optional extra.";
+
+  return [
+    goalLine,
+    nextMeal,
+    drink,
+    movement,
+    "Don't skip meals or cut tomorrow's calories sharply. Just return to your normal plan.",
+  ].join(" ");
+};
+
+// 8. Get AI Recovery Guidance (personalised to excess, goal and diet)
 const getRecoveryGuidance = async (req, res, next) => {
   try {
     const payload = req.method === "GET" ? req.query : req.body;
@@ -533,24 +596,117 @@ const getRecoveryGuidance = async (req, res, next) => {
         2000,
     );
     const consumedCalories = Number(payload.consumedCalories);
-    const requested = Math.max(
+    const excessKcal = Math.max(
       0,
       Math.floor(
-        Number(payload.deviationAmount) ||
+        Number(payload.excessKcal) ||
+          Number(payload.deviationAmount) ||
           (Number.isFinite(consumedCalories)
             ? consumedCalories - targetCalories
             : 0),
       ),
     );
-    const guidance =
-      requested > 0
-        ? `You have exceeded your daily calorie goal by ${requested} kcal. There is no need to compensate by skipping meals. Return to your usual balanced routine tomorrow, and consider discussing nutrition concerns with a qualified professional.`
-        : "You are within your daily calorie goal. Continue with balanced meals and consistent tracking.";
 
-    return res.status(200).json({
-      success: true,
-      data: { guidance },
-    });
+    if (excessKcal <= 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          guidance:
+            "You are within your daily calorie goal. Keep up the balanced meals and consistent tracking.",
+          personalized: false,
+          source: "rule",
+        },
+      });
+    }
+
+    const hour = Number(payload.localHour);
+    const goal = req.user?.fitnessGoal || req.user?.goal || "maintain";
+    const dietPreference =
+      (typeof payload.dietPreference === "string" && payload.dietPreference.trim()) ||
+      req.user?.dietPreference ||
+      "";
+    const context = {
+      excessKcal,
+      goal,
+      dietPreference,
+      hour: Number.isFinite(hour) ? hour : null,
+    };
+    const fallback = buildFallbackRecovery(context);
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(200).json({
+        success: true,
+        data: { guidance: fallback, personalized: true, source: "rule" },
+      });
+    }
+
+    // Today's logged meals (names only, this user only) for context.
+    const date =
+      typeof payload.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(payload.date)
+        ? payload.date
+        : null;
+    let mealNames = [];
+    if (date) {
+      const userId = req.user._id;
+      const meals = await Meal.find({
+        $and: [{ $or: [{ userId }, { user: userId }] }, { date }],
+      })
+        .select("name calories mealType")
+        .limit(12)
+        .lean();
+      mealNames = meals.map(
+        (meal) =>
+          `${String(meal.name || "meal").slice(0, 40)} (${Math.round(Number(meal.calories) || 0)} kcal${meal.mealType ? `, ${meal.mealType}` : ""})`,
+      );
+    }
+
+    try {
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({
+        model: GEMINI_MODEL,
+        generationConfig: { temperature: 0.5, responseMimeType: "application/json" },
+      });
+      const prompt = `You are a supportive registered-dietitian-style assistant inside a nutrition app.
+The user went over their daily calorie target. Write short, practical, personalised recovery advice.
+
+User context:
+- Calories over target today: ${excessKcal} kcal (target ${Math.round(targetCalories)} kcal)
+- Fitness goal: ${goal}
+- Diet / cuisine preference: ${dietPreference || "not specified"}
+- Time of day: ${timeOfDay(context.hour)}
+- Meals logged today: ${mealNames.length ? mealNames.join("; ") : "not available"}
+
+Rules:
+- 3 to 5 sentences, plain Standard English, warm and non-judgemental.
+- Suggest concrete foods that fit the stated cuisine preference (e.g. daal, sabzi, roti, raita for Desi/Pakistani; Western staples otherwise).
+- Tailor to the goal and to the size of the excess, and to what was eaten if listed.
+- Optional light movement only. Never suggest fasting, skipping meals, purging, laxatives, or compensating with large calorie cuts or intense exercise.
+- No markdown, no emojis, no headings.
+Return JSON only: {"guidance": "..."}`;
+
+      const result = await model.generateContent(prompt);
+      await recordGeminiUsage(result);
+      let guidance = "";
+      try {
+        guidance = String(JSON.parse(result.response.text())?.guidance || "").trim();
+      } catch {
+        guidance = "";
+      }
+      if (guidance.length < 40 || guidance.length > 1200) {
+        throw new Error("Unusable recovery guidance from model.");
+      }
+      return res.status(200).json({
+        success: true,
+        data: { guidance, personalized: true, source: "ai" },
+      });
+    } catch (aiError) {
+      console.warn("Recovery guidance AI fallback:", aiError.message);
+      return res.status(200).json({
+        success: true,
+        data: { guidance: fallback, personalized: true, source: "rule" },
+      });
+    }
   } catch (error) {
     next(error);
   }

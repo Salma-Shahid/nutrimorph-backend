@@ -9,13 +9,25 @@ const ProcessedPaddleEvent = require("../models/ProcessedPaddleEvent");
 const { protect } = require("../middlewares/authMiddleware");
 const { GEMINI_MODEL } = require("../config/ai");
 const isProUser = require("../utils/isProUser");
+const { getSubscriptionSnapshot } = require("../utils/isProUser");
 const connectDB = require("../config/db");
 const {
   assertPaddleConfigured,
   assertPaddlePricesConfigured,
   getPaddleClient,
+  isPaddleConfigured,
   syncUserCancellation,
 } = require("../services/paddleBilling");
+const revenueCat = require("../services/revenueCat");
+
+const arePaddlePricesConfigured = () => {
+  try {
+    assertPaddlePricesConfigured();
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 let billingIndexesPromise;
 const ensureBillingIndexes = () => {
@@ -108,6 +120,17 @@ const updateSubscriptionState = async (
     status === "paused" ||
     !stillPaidThroughPeriod;
 
+  // A Paddle revocation must not downgrade access granted by RevenueCat or an
+  // admin after the Paddle subscription lapsed.
+  if (
+    shouldRevoke &&
+    user.billingProvider &&
+    user.billingProvider !== "paddle" &&
+    isProUser(user)
+  ) {
+    return;
+  }
+
   const update = {
     paddleCustomerId: subscription.customerId,
     paddleSubscriptionId: subscription.id,
@@ -120,6 +143,8 @@ const updateSubscriptionState = async (
   if (shouldRevoke) {
     update.subscriptionTier = "free";
     update.isPro = false;
+  } else {
+    update.billingProvider = "paddle";
   }
 
   const orderingFilter = Number.isFinite(eventAt.getTime())
@@ -276,6 +301,7 @@ const verifyTransactionAndGrant = async (transaction, paddle, event) => {
     paddleCustomerId: transaction.customerId,
     paddleSubscriptionId: String(transaction.subscriptionId),
     paddlePriceId: expectedPriceId,
+    billingProvider: "paddle",
     trialStartDate: null,
     trialEndDate: null,
   };
@@ -432,7 +458,80 @@ const handlePaddleWebhook = async (req, res) => {
   }
 };
 
+// Public billing capability flags so clients can choose a provider and hide
+// unavailable options instead of hitting 503s. Contains no secrets.
+router.get("/config", (req, res) => {
+  const paddleReady = isPaddleConfigured() && arePaddlePricesConfigured();
+  const revenueCatReady = revenueCat.isRevenueCatConfigured();
+  res.json({
+    success: true,
+    data: {
+      preferredProvider: revenueCatReady
+        ? "revenuecat"
+        : paddleReady
+          ? "paddle"
+          : null,
+      revenueCat: {
+        serverConfigured: revenueCatReady,
+        entitlementId: revenueCat.getEntitlementId(),
+      },
+      paddle: {
+        configured: paddleReady,
+        message: paddleReady
+          ? null
+          : "Web checkout through Paddle is not available yet.",
+      },
+    },
+  });
+});
+
+// Verify the caller's RevenueCat entitlement server-side and sync Pro status.
+// The app user ID is always the authenticated user's ID, never a body value.
+router.post("/revenuecat/sync", protect, async (req, res) => {
+  if (!revenueCat.isRevenueCatConfigured()) {
+    return res.status(200).json({
+      success: false,
+      code: "REVENUECAT_NOT_CONFIGURED",
+      message:
+        "Purchase received. Pro access will activate once the server finishes verifying it.",
+      user: getSubscriptionSnapshot(req.user),
+    });
+  }
+  try {
+    await connectDB();
+    const { user, entitlement } = await revenueCat.syncUserFromRevenueCat(
+      req.user._id,
+    );
+    return res.json({
+      success: true,
+      entitlementActive: entitlement.active,
+      willRenew: entitlement.willRenew,
+      user: getSubscriptionSnapshot(user || req.user),
+    });
+  } catch (error) {
+    console.error(
+      "RevenueCat sync failed:",
+      error.response?.status || "",
+      error.message,
+    );
+    return res.status(502).json({
+      success: false,
+      code: "REVENUECAT_SYNC_FAILED",
+      message: "Could not verify your subscription right now. Please try again.",
+      user: getSubscriptionSnapshot(req.user),
+    });
+  }
+});
+
 router.post("/create-checkout-intent", protect, async (req, res) => {
+  if (!isPaddleConfigured() || !arePaddlePricesConfigured()) {
+    return res.status(503).json({
+      success: false,
+      code: "PADDLE_NOT_CONFIGURED",
+      message:
+        "Web checkout is not available yet. Please subscribe from the NutriMorph mobile app.",
+    });
+  }
   try {
     assertPaddleConfigured();
     assertPaddlePricesConfigured();
@@ -483,18 +582,10 @@ router.post("/create-checkout-intent", protect, async (req, res) => {
 router.post("/verify-payment", protect, async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select(
-      "subscriptionTier isPro subscriptionExpiresAt subscriptionStatus",
+      "subscriptionTier isPro subscriptionExpiresAt subscriptionStatus billingProvider trialEndDate",
     );
     if (!user) return res.status(404).json({ message: "User not found." });
-    return res.json({
-      success: true,
-      user: {
-        subscriptionTier: isProUser(user) ? "pro" : "free",
-        isPro: isProUser(user),
-        subscriptionExpiresAt: user.subscriptionExpiresAt,
-        subscriptionStatus: user.subscriptionStatus,
-      },
-    });
+    return res.json({ success: true, user: getSubscriptionSnapshot(user) });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
@@ -502,9 +593,25 @@ router.post("/verify-payment", protect, async (req, res) => {
 
 router.post("/cancel-subscription", protect, async (req, res) => {
   try {
-    assertPaddleConfigured();
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found." });
+    // Store subscriptions can only be cancelled by the user in the store.
+    if (user.billingProvider === "revenuecat") {
+      return res.json({
+        success: true,
+        manageInStore: true,
+        message:
+          "Your subscription is billed through Google Play or the App Store. Manage or cancel it from your store subscriptions page.",
+        manageUrl: "https://play.google.com/store/account/subscriptions",
+      });
+    }
+    if (!user.paddleSubscriptionId) {
+      return res.json({
+        success: true,
+        message: "No active Paddle subscription was found.",
+      });
+    }
+    assertPaddleConfigured();
     const cancellation = await syncUserCancellation(user, true);
     return res.json({
       success: true,
@@ -521,6 +628,52 @@ router.post("/cancel-subscription", protect, async (req, res) => {
 
 router.post("/webhook", express.raw({ type: "application/json" }), handlePaddleWebhook);
 
+// RevenueCat webhook. Authenticated with the shared Authorization value set in
+// the RevenueCat dashboard. The event is only a trigger: the entitlement is
+// re-read from the RevenueCat REST API so forged/out-of-order events cannot
+// grant access.
+const handleRevenueCatWebhook = async (req, res) => {
+  if (!revenueCat.isWebhookConfigured()) {
+    return res.status(200).json({ received: true, ignored: "not_configured" });
+  }
+  if (!revenueCat.verifyWebhookAuthorization(req.headers.authorization)) {
+    return res.status(401).json({ message: "Invalid webhook authorization." });
+  }
+
+  const event = req.body?.event;
+  const candidates = [
+    event?.app_user_id,
+    event?.original_app_user_id,
+    ...(Array.isArray(event?.aliases) ? event.aliases : []),
+  ].filter((id) => typeof id === "string" && /^[a-f0-9]{24}$/i.test(id));
+
+  if (!event || !candidates.length) {
+    // Anonymous RevenueCat IDs cannot be mapped to an account; acknowledge.
+    return res.status(200).json({ received: true, ignored: "unmapped_user" });
+  }
+
+  try {
+    await connectDB();
+    const userId = candidates[0];
+    if (!(await User.exists({ _id: userId }))) {
+      return res.status(200).json({ received: true, ignored: "unknown_user" });
+    }
+    if (!revenueCat.isRevenueCatConfigured()) {
+      console.warn(
+        "RevenueCat webhook received but REVENUECAT_SECRET_API_KEY is missing; entitlement not synced.",
+      );
+      return res.status(503).json({ message: "RevenueCat sync is not configured." });
+    }
+    await revenueCat.syncUserFromRevenueCat(userId);
+    return res.status(200).json({ received: true });
+  } catch (error) {
+    console.error("RevenueCat webhook sync failed:", error.message);
+    // Non-2xx makes RevenueCat retry the delivery.
+    return res.status(500).json({ message: "RevenueCat sync failed." });
+  }
+};
+
 router.handlePaddleWebhook = handlePaddleWebhook;
+router.handleRevenueCatWebhook = handleRevenueCatWebhook;
 router.syncUserCancellation = syncUserCancellation;
 module.exports = router;
