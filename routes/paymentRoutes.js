@@ -458,28 +458,36 @@ const handlePaddleWebhook = async (req, res) => {
   }
 };
 
-// Public billing capability flags so clients can choose a provider and hide
-// unavailable options instead of hitting 503s. Contains no secrets.
+// RevenueCat Web Purchase Link base (public, e.g. https://pay.rev.cat/<token>).
+// Clients append the signed-in user's ID so the purchase lands on their account.
+const getRevenueCatWebPurchaseUrl = () => {
+  const raw = (process.env.REVENUECAT_WEB_PURCHASE_URL || "").trim();
+  return /^https:\/\/\S+$/i.test(raw) ? raw.replace(/\/+$/, "") : null;
+};
+
+// Public billing capability flags so clients can choose a flow. Contains no
+// secrets. RevenueCat is primary; Paddle is an optional legacy fallback, so
+// its absence is a normal state, not an error.
 router.get("/config", (req, res) => {
   const paddleReady = isPaddleConfigured() && arePaddlePricesConfigured();
   const revenueCatReady = revenueCat.isRevenueCatConfigured();
-  res.json({
+  const webPurchaseUrl = getRevenueCatWebPurchaseUrl();
+  res.status(200).json({
     success: true,
     data: {
-      preferredProvider: revenueCatReady
-        ? "revenuecat"
-        : paddleReady
-          ? "paddle"
-          : null,
+      preferredProvider: "revenuecat",
       revenueCat: {
         serverConfigured: revenueCatReady,
         entitlementId: revenueCat.getEntitlementId(),
+        webPurchaseUrl,
       },
+      // How the website should sell Pro: RevenueCat web link, legacy Paddle
+      // checkout, or "app" (subscribe in the mobile app).
+      webCheckout: webPurchaseUrl ? "revenuecat" : paddleReady ? "paddle" : "app",
       paddle: {
         configured: paddleReady,
-        message: paddleReady
-          ? null
-          : "Web checkout through Paddle is not available yet.",
+        legacy: true,
+        message: null,
       },
     },
   });
@@ -538,7 +546,7 @@ router.post("/create-checkout-intent", protect, async (req, res) => {
       success: false,
       code: "PADDLE_NOT_CONFIGURED",
       message:
-        "Web checkout is not available yet. Please subscribe from the NutriMorph mobile app.",
+        "Paddle web checkout is not enabled. Subscribe to Pro in the NutriMorph mobile app.",
     });
   }
   try {
@@ -601,7 +609,7 @@ router.post("/create-checkout-intent", protect, async (req, res) => {
       success: false,
       code: configError ? "PADDLE_NOT_CONFIGURED" : "CHECKOUT_INTENT_FAILED",
       message: configError
-        ? "Web checkout is not available yet. Please subscribe from the NutriMorph mobile app."
+        ? "Paddle web checkout is not enabled. Subscribe to Pro in the NutriMorph mobile app."
         : "Could not prepare checkout. Please try again.",
     });
   }
